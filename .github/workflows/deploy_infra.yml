@@ -1,0 +1,50 @@
+name: deploy-infra-dev
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "infra/**"
+      - "tools/**"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install toolchain
+        run: |
+          pip install -U pip ruff pytest
+          npm i -g aws-cdk
+
+      - name: Lint & Test
+        run: |
+          ruff check .
+          pytest -q
+
+      - name: Assume AWS role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::765936999892:role/GitHubActions-Deploy-InfraRole
+          aws-region: ap-northeast-1
+
+      - name: CDK Synth & Deploy
+        run: |
+          cd infra
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+          cdk synth
+          cdk deploy --all --require-approval never
