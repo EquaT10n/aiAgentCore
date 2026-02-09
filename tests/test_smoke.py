@@ -1,7 +1,4 @@
-from __future__ import annotations
+from agent.app import main
 
-from agent import app
-
-
-def test_agent_main() -> None:
-    assert app.main() == "ok"
+def test_smoke():
+    assert main() == "ok"
