@@ -9,6 +9,12 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - name: Debug trigger context
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "repository=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
         with:
