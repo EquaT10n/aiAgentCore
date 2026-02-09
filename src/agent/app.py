@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def main() -> str:
-    return "ok"
+    return "ok!"
 
 
 if __name__ == "__main__":
