@@ -1,0 +1,17 @@
+name: oidc-test
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::765936999892:role/GitHubActions-Deploy-InfraRole
+          aws-region: ap-northeast-1
+      - run: aws sts get-caller-identity
