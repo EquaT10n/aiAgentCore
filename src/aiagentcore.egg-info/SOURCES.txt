@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+src/agent/__init__.py
+src/agent/app.py
+src/aiagentcore.egg-info/PKG-INFO
+src/aiagentcore.egg-info/SOURCES.txt
+src/aiagentcore.egg-info/dependency_links.txt
+src/aiagentcore.egg-info/top_level.txt
+tests/test_smoke.py
