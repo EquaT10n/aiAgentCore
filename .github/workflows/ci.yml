@@ -5,6 +5,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 # 定义本工作流中的作业
 jobs:
