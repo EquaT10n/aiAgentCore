@@ -44,6 +44,8 @@ jobs:
         run: |
           # 安装 Python 包管理和质量工具
           pip install -U pip ruff pytest
+          # 安装当前项目（让 tests 可导入 src/agent 包）
+          pip install -e .
           # 全局安装 AWS CDK CLI
           npm i -g aws-cdk
 
