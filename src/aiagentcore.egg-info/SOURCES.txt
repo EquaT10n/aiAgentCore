@@ -2,8 +2,17 @@ README.md
 pyproject.toml
 src/agent/__init__.py
 src/agent/app.py
+src/agent/settings.py
+src/agent/llm/__init__.py
+src/agent/llm/bedrock.py
+src/agent/pdf/__init__.py
+src/agent/pdf/render.py
+src/agent/storage/__init__.py
+src/agent/storage/dynamo.py
+src/agent/storage/s3.py
 src/aiagentcore.egg-info/PKG-INFO
 src/aiagentcore.egg-info/SOURCES.txt
 src/aiagentcore.egg-info/dependency_links.txt
+src/aiagentcore.egg-info/requires.txt
 src/aiagentcore.egg-info/top_level.txt
 tests/test_smoke.py

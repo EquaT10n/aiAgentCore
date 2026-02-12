@@ -1,27 +1,42 @@
+# 工作流名称，会显示在 GitHub Actions 页面上
 name: CI
 
+# 触发条件：代码 push 或发起/更新 PR 时运行
 on:
   push:
   pull_request:
 
+# 定义本工作流中的作业
 jobs:
+  # 作业名：做静态检查和测试
   lint-test:
+    # 使用 GitHub 托管的最新 Ubuntu Runner
     runs-on: ubuntu-latest
+    # 作业执行步骤（按顺序执行）
     steps:
+      # 拉取仓库代码到 Runner
       - uses: actions/checkout@v4
 
+      # 安装指定版本 Python
       - uses: actions/setup-python@v5
         with:
+          # CI 统一使用 Python 3.11
           python-version: "3.11"
 
+      # 安装基础工具和当前项目
       - name: Install tools & project
         run: |
+          # 升级 pip，减少依赖安装兼容问题
           python -m pip install --upgrade pip
+          # 安装代码检查和测试工具
           pip install ruff pytest
+          # 以可编辑模式安装当前项目
           pip install -e .
 
+      # 运行 Ruff 静态检查
       - name: Ruff
         run: ruff check .
 
+      # 运行 Pytest 单元测试
       - name: Pytest
         run: pytest -q

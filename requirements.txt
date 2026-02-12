@@ -1,2 +1,5 @@
 ruff
 pytest
+boto3
+reportlab
+pytest-mock

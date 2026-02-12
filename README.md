@@ -17,6 +17,5 @@ The CDK app is intentionally minimal and does not deploy any resources.
 
 ## Next steps
 
-- Add real Lambda implementations under `tools/`.
 - Extend the CDK stack in `infra/app.py`.
 - Add application logic in `agent/` and tests in `tests/`.
