@@ -1,50 +1,209 @@
+# 工作流名称：部署开发环境基础设施
 name: deploy-infra-dev
+
+# 触发条件：main 分支有相关目录变更时触发
 on:
   push:
+    # 只监听 main 分支
     branches: [ "main" ]
+    # 仅当这些路径变化时才运行，避免无关提交触发部署
     paths:
       - "infra/**"
-      - "tools/**"
+      - "src/agent/**"
+      - ".github/workflows/deploy_infra.yml"
 
+# 定义部署作业
 jobs:
   deploy:
+    # 使用 Ubuntu Runner 执行部署
     runs-on: ubuntu-latest
+    # 最小权限原则：仅授予本作业需要的权限
     permissions:
+      # 用于 OIDC 联邦登录 AWS（签发短期凭证）
       id-token: write
+      # 读取仓库内容（checkout 需要）
       contents: read
 
+    # 部署步骤（按顺序执行）
     steps:
+      # 拉取代码
       - uses: actions/checkout@v4
 
+      # 安装 Python 运行时
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 安装 Node.js（CDK CLI 依赖 Node）
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
+      # 安装 lint/test/CDK 工具链
       - name: Install toolchain
         run: |
+          # 安装 Python 包管理和质量工具
           pip install -U pip ruff pytest
+          # 全局安装 AWS CDK CLI
           npm i -g aws-cdk
 
+      # 部署前先过质量门禁
       - name: Lint & Test
         run: |
+          # 代码静态检查
           ruff check .
+          # 自动化测试
           pytest -q
 
+      # 通过 GitHub OIDC 临时扮演 AWS 角色
       - name: Assume AWS role via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # 目标 IAM Role（需预先配置对 GitHub OIDC 的信任）
           role-to-assume: arn:aws:iam::765936999892:role/GitHubActions-Deploy-InfraRole
+          # 默认操作区域
           aws-region: ap-northeast-1
 
-      - name: CDK Synth & Deploy
+      # 确保 ECR 仓库存在，并输出仓库信息给后续步骤
+      - name: Resolve ECR repository
+        # 为步骤设置 ID，便于后续通过 steps.ecr.outputs.* 读取输出
+        id: ecr
+        env:
+          # 当前步骤用到的区域变量
+          AWS_REGION: ap-northeast-1
         run: |
+          # 失败即退出；未定义变量报错；管道中任一步失败都报错
+          set -euo pipefail
+          # 固定运行时镜像仓库名
+          REPO_NAME="ai-agentcore-runtime"
+          # 若仓库不存在则创建
+          if ! aws ecr describe-repositories --repository-names "${REPO_NAME}" >/dev/null 2>&1; then
+            aws ecr create-repository --repository-name "${REPO_NAME}" >/dev/null
+          fi
+          # 获取当前 AWS 账号 ID
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          # 拼接完整 ECR URI（账号+区域+仓库名）
+          REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}"
+          # 写入步骤输出：仓库名
+          echo "repo_name=${REPO_NAME}" >> "${GITHUB_OUTPUT}"
+          # 写入步骤输出：仓库 URI
+          echo "repo_uri=${REPO_URI}" >> "${GITHUB_OUTPUT}"
+
+      # 配置 Docker Buildx，支持多架构构建
+      - name: Configure Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 登录 ECR，后续 docker push 才有权限
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 构建并推送 ARM64 运行时镜像
+      - name: Build and push runtime image (linux/arm64)
+        # 步骤输出 ID
+        id: build
+        env:
+          # 用当前 commit sha 作为镜像 tag，保证可追溯
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # 使用 buildx 构建并直接 push 到 ECR
+          docker buildx build \
+            --platform linux/arm64 \
+            --file src/agent/Dockerfile \
+            --tag "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}" \
+            --push \
+            src/agent
+          # 输出镜像 tag 给 CDK 部署步骤使用
+          echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
+
+      # 合成并部署 CDK 栈
+      - name: CDK Synth & Deploy
+        env:
+          # 从 GitHub Actions 仓库变量读取模型 ID（可为空，脚本里有默认值）
+          MODEL_ID: ${{ vars.MODEL_ID }}
+          # 可选：指定模型 ARN（跨账号或特殊权限场景）
+          MODEL_ARN: ${{ vars.MODEL_ARN }}
+          # 预签名 URL 过期秒数
+          PDF_URL_EXPIRES: ${{ vars.PDF_URL_EXPIRES }}
+        run: |
+          set -euo pipefail
+          # 进入 CDK 项目目录
           cd infra
+          # 创建隔离虚拟环境，避免污染系统环境
           python -m venv .venv
+          # 激活虚拟环境（Linux Runner 语法）
           source .venv/bin/activate
+          # 安装 CDK Python 依赖
           pip install -r requirements.txt
-          cdk synth
-          cdk deploy --all --require-approval never
+          # 先 synth，提前发现模板/上下文错误
+          cdk synth \
+            -c existing_ecr_repository_name=${{ steps.ecr.outputs.repo_name }} \
+            -c runtime_image_tag=${{ steps.build.outputs.image_tag }} \
+            -c model_id="${MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}" \
+            -c model_arn="${MODEL_ARN:-}" \
+            -c pdf_url_expires="${PDF_URL_EXPIRES:-600}"
+          # 正式部署所有栈，且关闭人工审批（CI 场景）
+          cdk deploy --all --require-approval never \
+            -c existing_ecr_repository_name=${{ steps.ecr.outputs.repo_name }} \
+            -c runtime_image_tag=${{ steps.build.outputs.image_tag }} \
+            -c model_id="${MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}" \
+            -c model_arn="${MODEL_ARN:-}" \
+            -c pdf_url_expires="${PDF_URL_EXPIRES:-600}"
+
+      # 部署后做一次真实调用烟雾测试，验证端到端可用
+      - name: Smoke test /invocations
+        env:
+          AWS_REGION: ap-northeast-1
+        run: |
+          set -euo pipefail
+          # CloudFormation 栈名（与 infra/app.py 中一致）
+          STACK_NAME="InfraStack"
+          # 读取栈输出（JSON）
+          STACK_OUTPUTS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].Outputs" --output json)"
+          # 优先读取直接输出的 invoke URL
+          URL="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointInvokeUrl") | .OutputValue' | head -n1)"
+          # 如果没有直接 URL，则根据 runtime id + endpoint name 拼装
+          if [ -z "${URL}" ] || [ "${URL}" = "None" ]; then
+            RUNTIME_ID="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeId") | .OutputValue' | head -n1)"
+            ENDPOINT_NAME="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointName") | .OutputValue' | head -n1)"
+            URL="https://bedrock-agentcore.${AWS_REGION}.amazonaws.com/runtimes/${RUNTIME_ID}/invocations?qualifier=${ENDPOINT_NAME}"
+          fi
+          # 构造最小请求体
+          PAYLOAD='{"prompt":"smoke ping","user_id":"gha","session_id":"deploy-smoke","locale":"zh-CN"}'
+
+          # 最多重试 6 次（每次间隔 10 秒），应对刚部署完成的短暂冷启动
+          for i in 1 2 3 4 5 6; do
+            if curl --fail-with-body --silent --show-error \
+              # 使用 AWS SigV4 对请求签名
+              --aws-sigv4 "aws:amz:${AWS_REGION}:bedrock-agentcore" \
+              # 访问密钥来自 configure-aws-credentials 注入的临时凭证
+              --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+              # 会话令牌（STS 临时凭证必须带）
+              -H "x-amz-security-token: ${AWS_SESSION_TOKEN}" \
+              # 声明 JSON 请求
+              -H "content-type: application/json" \
+              # 请求体
+              -d "${PAYLOAD}" \
+              # 目标 URL
+              "${URL}" > response.json; then
+              break
+            fi
+            # 最后一次仍失败则让作业失败
+            if [ "$i" -eq 6 ]; then
+              exit 1
+            fi
+            # 等待后重试
+            sleep 10
+          done
+
+          # 校验响应：状态码正常且包含关键业务字段
+          jq -e '
+            def body_obj:
+              if has("body") then
+                if (.body | type) == "string" then (.body | fromjson) else .body end
+              else
+                .
+              end;
+            ((has("statusCode") | not) or (.statusCode == 200))
+            and ((body_obj | .record_id and .answer and .pdf.s3_key and .pdf.url))
+          ' response.json >/dev/null
