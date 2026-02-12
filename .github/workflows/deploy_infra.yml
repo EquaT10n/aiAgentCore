@@ -11,6 +11,7 @@ on:
       - "infra/**"
       - "src/agent/**"
       - ".github/workflows/deploy_infra.yml"
+  workflow_dispatch:
 
 # 定义部署作业
 jobs:
