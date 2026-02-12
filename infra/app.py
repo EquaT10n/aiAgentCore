@@ -1,29 +1,31 @@
 from __future__ import annotations
 
-# 引入 AWS CDK 主模块（包含 App/Fn/Aws 等核心构件）
 import aws_cdk as cdk
-# 从 CDK 中按需导入会用到的资源构件
 from aws_cdk import (
-    # CloudFormation 输出
     CfnOutput,
-    # 时间表达（如生命周期 30 天）
     Duration,
-    # 栈基类
     Stack,
-    # Bedrock AgentCore 资源
+)
+from aws_cdk import (
     aws_bedrockagentcore as bedrockagentcore,
-    # DynamoDB 资源
+)
+from aws_cdk import (
     aws_dynamodb as dynamodb,
-    # ECR 镜像仓库资源
+)
+from aws_cdk import (
     aws_ecr as ecr,
-    # IAM 权限资源
+)
+from aws_cdk import (
     aws_iam as iam,
-    # S3 存储资源
+)
+from aws_cdk import (
     aws_s3 as s3,
 )
-# CDK 构造树中的基础节点类型
 from constructs import Construct
 
+# 引入 AWS CDK 主模块（包含 App/Fn/Aws 等核心构件）
+# 从 CDK 中按需导入会用到的资源构件
+# CDK 构造树中的基础节点类型
 
 # 基础设施主栈：定义运行时所需全部云资源
 class InfraStack(Stack):
@@ -37,7 +39,9 @@ class InfraStack(Stack):
         # 读取镜像 tag，默认 latest
         runtime_image_tag = self.node.try_get_context("runtime_image_tag") or "latest"
         # 读取模型 ID，未传则使用默认 Claude 模型
-        model_id = self.node.try_get_context("model_id") or "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        model_id = self.node.try_get_context("model_id") or (
+            "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
         # 读取模型 ARN（可选，优先级高于 model_id 拼 ARN）
         model_arn = self.node.try_get_context("model_arn")
         # 读取 PDF 预签名 URL 过期时间（秒），统一转字符串传入环境变量
@@ -108,7 +112,11 @@ class InfraStack(Stack):
                     str(model_arn)
                     if model_arn
                     # 否则按 model_id 在当前分区/区域拼出基础模型 ARN
-                    else f"arn:{cdk.Aws.PARTITION}:bedrock:{cdk.Aws.REGION}::foundation-model/{model_id}"
+                    else (
+                        "arn:"
+                        f"{cdk.Aws.PARTITION}:bedrock:{cdk.Aws.REGION}"
+                        f"::foundation-model/{model_id}"
+                    )
                 ],
             )
         )
@@ -171,7 +179,12 @@ class InfraStack(Stack):
         # 生成相对调用路径（便于调试或网关拼接）
         invoke_path = cdk.Fn.join(
             "",
-            ["/runtimes/", runtime.attr_agent_runtime_id, "/invocations?qualifier=", runtime_endpoint.name],
+            [
+                "/runtimes/",
+                runtime.attr_agent_runtime_id,
+                "/invocations?qualifier=",
+                runtime_endpoint.name,
+            ],
         )
         # 生成完整调用 URL（输出给部署后 smoke test 使用）
         invoke_url = cdk.Fn.join(
@@ -195,7 +208,11 @@ class InfraStack(Stack):
         CfnOutput(self, "RuntimeImageRepositoryUri", value=runtime_repo.repository_uri)
         CfnOutput(self, "AgentRuntimeArn", value=runtime.attr_agent_runtime_arn)
         CfnOutput(self, "AgentRuntimeId", value=runtime.attr_agent_runtime_id)
-        CfnOutput(self, "AgentRuntimeEndpointArn", value=runtime_endpoint.attr_agent_runtime_endpoint_arn)
+        CfnOutput(
+            self,
+            "AgentRuntimeEndpointArn",
+            value=runtime_endpoint.attr_agent_runtime_endpoint_arn,
+        )
         CfnOutput(self, "AgentRuntimeEndpointId", value=runtime_endpoint.attr_id)
         CfnOutput(self, "AgentRuntimeEndpointName", value=runtime_endpoint.name)
         CfnOutput(self, "AgentRuntimeEndpoint", value=runtime_endpoint.name)

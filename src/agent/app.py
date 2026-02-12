@@ -2,23 +2,31 @@ from __future__ import annotations
 
 # JSON 序列化/反序列化
 import json
+
 # 标准日志模块
 import logging
+
 # 高精度耗时统计
 from time import perf_counter
+
 # 类型提示
 from typing import Any
+
 # 生成全局唯一记录 ID
 from uuid import uuid4
 
 # 调用 Bedrock 生成回答
 from agent.llm.bedrock import generate_answer
+
 # 将问答内容渲染为 PDF
 from agent.pdf.render import render_pdf
+
 # 读取运行时配置（环境变量）
 from agent.settings import Settings
+
 # 写入 DynamoDB 记录
 from agent.storage.dynamo import put_record
+
 # 处理 S3 key、上传 PDF、生成预签名 URL
 from agent.storage.s3 import build_pdf_s3_key, generate_presigned_pdf_url, upload_pdf
 

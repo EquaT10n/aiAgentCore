@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-# JSON 读写
 import json
-# 用于构造固定 UUID，保证测试可重复
 import uuid
-# 固定时间输入和 UTC 时区
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-# 被测应用入口
 from agent import app
-# 被测 PDF 渲染函数
 from agent.pdf.render import render_pdf
-# 被测 S3 key 规则函数
 from agent.storage.s3 import build_pdf_s3_key
 
+# JSON 读写
+# 用于构造固定 UUID，保证测试可重复
+# 固定时间输入和 UTC 时区
+# 被测应用入口
+# 被测 PDF 渲染函数
+# 被测 S3 key 规则函数
 
 # 验证 PDF 渲染函数至少能产出有效 PDF 字节
 def test_render_pdf_generates_bytes() -> None:
@@ -37,7 +37,7 @@ def test_build_pdf_s3_key_rule() -> None:
     # 传入固定时间，避免依赖系统当前时间
     key = build_pdf_s3_key(
         record_id="abc123",
-        now=datetime(2026, 2, 9, 1, 2, 3, tzinfo=timezone.utc),
+        now=datetime(2026, 2, 9, 1, 2, 3, tzinfo=UTC),
     )
     # 断言 key 格式为 pdf/YYYY/MM/<id>.pdf
     assert key == "pdf/2026/02/abc123.pdf"
@@ -76,7 +76,11 @@ def test_invocations_happy_path_with_mocked_aws(monkeypatch) -> None:
         lambda bucket_name, key, expires_in: f"https://example.test/{bucket_name}/{key}?exp={expires_in}",
     )
     # 打补丁替换落库函数，并捕获 record
-    monkeypatch.setattr(app, "put_record", lambda table_name, record: captured.update(record=record))
+    monkeypatch.setattr(
+        app,
+        "put_record",
+        lambda table_name, record: captured.update(record=record),
+    )
 
     # 构造一次标准调用（body 为 JSON 字符串）
     response = app.invocations(
@@ -92,7 +96,7 @@ def test_invocations_happy_path_with_mocked_aws(monkeypatch) -> None:
     # 断言回答来自 mock
     assert body["answer"] == "mock-answer"
     # 断言 S3 key 路径规则正确（年月基于当前 UTC 时间）
-    assert body["pdf"]["s3_key"] == f"pdf/{datetime.now(timezone.utc):%Y/%m}/{fixed_id}.pdf"
+    assert body["pdf"]["s3_key"] == f"pdf/{datetime.now(UTC):%Y/%m}/{fixed_id}.pdf"
     # 断言 URL 过期参数来自环境变量配置
     assert body["pdf"]["url"].endswith("?exp=900")
     # 断言上传时 bucket 正确

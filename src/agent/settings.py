@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # 读取环境变量
 import os
+
 # 轻量不可变配置对象
 from dataclasses import dataclass
 
@@ -31,7 +32,7 @@ class Settings:
 
     # 工厂方法：从环境变量构建 Settings 实例
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         # 可选变量：未提供时默认 600 秒
         expires = int(os.getenv("PDF_URL_EXPIRES", "600"))
         # 必填变量通过 _required_env 校验

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 # 时间戳用于按年月分区对象路径
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 # 类型提示
 from typing import Any
 
@@ -12,7 +13,7 @@ import boto3
 # 根据记录 ID 生成 PDF 对象键：pdf/YYYY/MM/<record_id>.pdf
 def build_pdf_s3_key(record_id: str, now: datetime | None = None) -> str:
     # 支持注入 now（便于测试），未传则取当前 UTC 时间
-    ts = now or datetime.now(timezone.utc)
+    ts = now or datetime.now(UTC)
     # 按年月分层目录，便于管理与生命周期策略
     return f"pdf/{ts:%Y/%m}/{record_id}.pdf"
 

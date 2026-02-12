@@ -5,6 +5,7 @@ from io import BytesIO
 
 # A4 纸尺寸常量
 from reportlab.lib.pagesizes import A4
+
 # PDF 绘图画布
 from reportlab.pdfgen import canvas
 
