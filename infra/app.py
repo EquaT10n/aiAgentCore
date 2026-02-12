@@ -215,7 +215,7 @@ class InfraStack(Stack):
         )
         CfnOutput(self, "AgentRuntimeEndpointId", value=runtime_endpoint.attr_id)
         CfnOutput(self, "AgentRuntimeEndpointName", value=runtime_endpoint.name)
-        CfnOutput(self, "AgentRuntimeEndpoint", value=runtime_endpoint.name)
+        CfnOutput(self, "AgentRuntimeEndpointOutput", value=runtime_endpoint.name)
         CfnOutput(self, "AgentRuntimeEndpointInvokeUrl", value=invoke_url)
         CfnOutput(self, "InvokePath", value=invoke_path)
 
