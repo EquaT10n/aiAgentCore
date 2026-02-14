@@ -40,9 +40,9 @@ REQUIRED_FIELDS = ("prompt", "user_id", "session_id", "locale")
 def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
     # 读取 body 字段（可能不存在）
     body = event.get("body")
-    # 没有 body 时返回空字典
+    # 没有 body 时，兼容直接传顶层 JSON 的调用
     if body is None:
-        return {}
+        return event if isinstance(event, dict) else {}
     # 如果上游已经是字典，直接返回
     if isinstance(body, dict):
         return body
