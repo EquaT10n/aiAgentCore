@@ -136,6 +136,7 @@ class InfraStack(Stack):
                 resources=[runtime_repo.repository_arn],
             )
         )
+        runtime_repo.grant_pull(runtime_role)
         # 授予写入 DynamoDB 权限（保存问答记录）
         runtime_role.add_to_policy(
             iam.PolicyStatement(
@@ -177,6 +178,9 @@ class InfraStack(Stack):
                 "PDF_URL_EXPIRES": pdf_url_expires,
             },
         )
+        default_policy = runtime_role.node.try_find_child("DefaultPolicy")
+        if default_policy is not None and default_policy.node.default_child is not None:
+            runtime.add_dependency(default_policy.node.default_child)
 
         # 创建 Runtime Endpoint：提供实际调用入口
         runtime_endpoint = bedrockagentcore.CfnRuntimeEndpoint(
