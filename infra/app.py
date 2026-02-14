@@ -140,7 +140,7 @@ class InfraStack(Stack):
             self,
             "AgentRuntime",
             # 运行时名称（全局可识别）
-            agent_runtime_name="ai-agentcore-runtime",
+            agent_runtime_name="ai_agentcore_runtime",
             # 绑定执行角色
             role_arn=runtime_role.role_arn,
             # 网络模式：公网访问
