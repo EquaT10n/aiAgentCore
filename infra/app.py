@@ -201,8 +201,10 @@ class InfraStack(Stack):
             "",
             [
                 "/runtimes/",
-                runtime.attr_agent_runtime_id,
-                "/invocations?qualifier=",
+                runtime.attr_agent_runtime_arn,
+                "/invocations?accountId=",
+                self.account,
+                "&qualifier=",
                 runtime_endpoint.name,
             ],
         )
@@ -213,8 +215,10 @@ class InfraStack(Stack):
                 "https://bedrock-agentcore.",
                 self.region,
                 ".amazonaws.com/runtimes/",
-                runtime.attr_agent_runtime_id,
-                "/invocations?qualifier=",
+                runtime.attr_agent_runtime_arn,
+                "/invocations?accountId=",
+                self.account,
+                "&qualifier=",
                 runtime_endpoint.name,
             ],
         )
