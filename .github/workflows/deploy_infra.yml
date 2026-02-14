@@ -172,20 +172,25 @@ jobs:
             URL="https://bedrock-agentcore.${AWS_REGION}.amazonaws.com/runtimes/${RUNTIME_ID}/invocations?qualifier=${ENDPOINT_NAME}"
           fi
           # 构造最小请求体
-          PAYLOAD='{"prompt":"smoke ping","user_id":"gha","session_id":"deploy-smoke","locale":"zh-CN"}'
+          PAYLOAD='{"body":{"prompt":"smoke ping","user_id":"gha","session_id":"deploy-smoke","locale":"zh-CN"}}'
 
           # 最多重试 6 次（每次间隔 10 秒），应对刚部署完成的短暂冷启动
           for i in 1 2 3 4 5 6; do
             # 使用 AWS SigV4 对请求签名，发起带临时凭证的调用
-            if curl --fail-with-body --silent --show-error \
+            HTTP_CODE="$(curl --silent --show-error \
               --aws-sigv4 "aws:amz:${AWS_REGION}:bedrock-agentcore" \
               --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
               -H "x-amz-security-token: ${AWS_SESSION_TOKEN}" \
               -H "content-type: application/json" \
               -d "${PAYLOAD}" \
-              "${URL}" > response.json; then
+              --output response.json \
+              --write-out "%{http_code}" \
+              "${URL}")"
+            if [ "${HTTP_CODE}" = "200" ]; then
               break
             fi
+            echo "Smoke attempt ${i} failed (HTTP ${HTTP_CODE})"
+            cat response.json || true
             # 最后一次仍失败则让作业失败
             if [ "$i" -eq 6 ]; then
               exit 1
