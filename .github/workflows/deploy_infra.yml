@@ -163,14 +163,17 @@ jobs:
           STACK_NAME="InfraStack"
           # 读取栈输出（JSON）
           STACK_OUTPUTS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].Outputs" --output json)"
-          # 优先读取直接输出的 invoke URL
-          URL="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointInvokeUrl") | .OutputValue' | head -n1)"
-          # 如果没有直接 URL，则根据 runtime id + endpoint name 拼装
-          if [ -z "${URL}" ] || [ "${URL}" = "None" ]; then
-            RUNTIME_ID="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeId") | .OutputValue' | head -n1)"
-            ENDPOINT_NAME="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointName") | .OutputValue' | head -n1)"
-            URL="https://bedrock-agentcore.${AWS_REGION}.amazonaws.com/runtimes/${RUNTIME_ID}/invocations?qualifier=${ENDPOINT_NAME}"
+          # InvokeAgentRuntime 需要 ARN + accountId（runtimeId 会触发 400）
+          RUNTIME_ARN="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeArn") | .OutputValue' | head -n1)"
+          ENDPOINT_NAME="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointName") | .OutputValue' | head -n1)"
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          if [ -z "${RUNTIME_ARN}" ] || [ "${RUNTIME_ARN}" = "None" ] || [ -z "${ENDPOINT_NAME}" ] || [ "${ENDPOINT_NAME}" = "None" ]; then
+            echo "Missing required stack outputs: AgentRuntimeArn or AgentRuntimeEndpointName"
+            echo "${STACK_OUTPUTS}"
+            exit 1
           fi
+          RUNTIME_ARN_ENCODED="$(printf '%s' "${RUNTIME_ARN}" | jq -sRr @uri)"
+          URL="https://bedrock-agentcore.${AWS_REGION}.amazonaws.com/runtimes/${RUNTIME_ARN_ENCODED}/invocations?accountId=${ACCOUNT_ID}&qualifier=${ENDPOINT_NAME}"
           # 构造最小请求体
           PAYLOAD='{"body":{"prompt":"smoke ping","user_id":"gha","session_id":"deploy-smoke","locale":"zh-CN"}}'
 
