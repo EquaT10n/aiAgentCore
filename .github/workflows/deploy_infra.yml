@@ -176,18 +176,13 @@ jobs:
 
           # 最多重试 6 次（每次间隔 10 秒），应对刚部署完成的短暂冷启动
           for i in 1 2 3 4 5 6; do
+            # 使用 AWS SigV4 对请求签名，发起带临时凭证的调用
             if curl --fail-with-body --silent --show-error \
-              # 使用 AWS SigV4 对请求签名
               --aws-sigv4 "aws:amz:${AWS_REGION}:bedrock-agentcore" \
-              # 访问密钥来自 configure-aws-credentials 注入的临时凭证
               --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
-              # 会话令牌（STS 临时凭证必须带）
               -H "x-amz-security-token: ${AWS_SESSION_TOKEN}" \
-              # 声明 JSON 请求
               -H "content-type: application/json" \
-              # 请求体
               -d "${PAYLOAD}" \
-              # 目标 URL
               "${URL}" > response.json; then
               break
             fi
