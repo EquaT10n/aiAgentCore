@@ -120,6 +120,22 @@ class InfraStack(Stack):
                 ],
             )
         )
+        runtime_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["ecr:GetAuthorizationToken"],
+                resources=["*"],
+            )
+        )
+        runtime_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchCheckLayerAvailability",
+                ],
+                resources=[runtime_repo.repository_arn],
+            )
+        )
         # 授予写入 DynamoDB 权限（保存问答记录）
         runtime_role.add_to_policy(
             iam.PolicyStatement(
