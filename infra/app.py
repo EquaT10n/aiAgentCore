@@ -203,6 +203,8 @@ class InfraStack(Stack):
                 "TABLE_NAME": qa_table.table_name,
                 "BUCKET_NAME": pdf_bucket.bucket_name,
                 "PDF_URL_EXPIRES": pdf_url_expires,
+                "AWS_REGION": self.region,
+                "AWS_DEFAULT_REGION": self.region,
             },
         )
         default_policy = runtime_role.node.try_find_child("DefaultPolicy")
