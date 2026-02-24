@@ -96,6 +96,10 @@ jobs:
       - name: Configure Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # 安装 QEMU，允许在 x86 runner 上运行 arm64 容器做自检
+      - name: Configure QEMU
+        uses: docker/setup-qemu-action@v3
+
       # 登录 ECR，后续 docker push 才有权限
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -117,6 +121,10 @@ jobs:
             --tag "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}" \
             --push \
             src/agent
+          # 构建后强制拉取并在容器内做依赖自检，避免部署后才暴露缺包问题
+          docker pull --platform linux/arm64 "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}"
+          docker run --rm --platform linux/arm64 "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}" \
+            python -c "import boto3, reportlab; print('deps_ok', boto3.__version__)"
           # 输出镜像 tag 给 CDK 部署步骤使用
           echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
 
