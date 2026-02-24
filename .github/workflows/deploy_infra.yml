@@ -119,12 +119,13 @@ jobs:
             --pull \
             --file src/agent/Dockerfile \
             --tag "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}" \
-            --push \
+            --load \
             src/agent
-          # 构建后强制拉取并在容器内做依赖自检，避免部署后才暴露缺包问题
-          docker pull --platform linux/arm64 "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}"
+          # 在本地镜像上做依赖自检，避免部署后才暴露缺包问题
           docker run --rm --platform linux/arm64 "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}" \
             python -c "import boto3, reportlab; print('deps_ok', boto3.__version__)"
+          # 自检通过后再推送到 ECR
+          docker push "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}"
           # 输出镜像 tag 给 CDK 部署步骤使用
           echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
 
