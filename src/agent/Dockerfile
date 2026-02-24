@@ -1,11 +1,14 @@
-# 以官方 Python 3.11 slim 镜像作为基础运行环境
 FROM python:3.11-slim
 
-# 设置容器内工作目录
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# 将当前构建上下文（src/agent）复制到容器内的包目录
+# Runtime code depends on boto3/reportlab.
+RUN pip install --no-cache-dir "boto3>=1.34,<2" "reportlab>=4,<5"
+
 COPY . /app/agent
 
-# 容器启动命令：运行 agent.app 模块
-CMD ["python", "-m", "agent.app"]
+# Keep container alive with an HTTP server that handles /invocations.
+CMD ["python", "-m", "agent.server"]
