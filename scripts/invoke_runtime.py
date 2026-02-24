@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+# 解析命令行参数
 import argparse
+# 处理 JSON 负载与响应
 import json
+# 用于默认 session_id（时间戳）
 import time
+# 类型标注
 from typing import Any
 
+# AWS SDK
 import boto3
 
 
+# 定义命令行参数
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Invoke Bedrock AgentCore runtime endpoint."
@@ -23,12 +29,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# 解析调用目标（优先用命令行传入，否则读 CloudFormation 输出）
 def resolve_runtime_target(
     region: str,
     stack_name: str,
     runtime_arn: str | None,
     qualifier: str | None,
 ) -> tuple[str, str]:
+    # 如果两个关键参数都已提供，直接使用
     if runtime_arn and qualifier:
         return runtime_arn, qualifier
 
@@ -48,6 +56,7 @@ def resolve_runtime_target(
     return resolved_runtime_arn, resolved_qualifier
 
 
+# 兼容 Bedrock 可能返回的多种 response 结构
 def decode_response_blob(blob: Any) -> dict[str, Any]:
     if isinstance(blob, (bytes, bytearray)):
         return json.loads(bytes(blob).decode("utf-8"))
@@ -66,6 +75,7 @@ def decode_response_blob(blob: Any) -> dict[str, Any]:
     raise TypeError(f"Unsupported response payload type: {type(blob)!r}")
 
 
+# 脚本主流程：调用 runtime 并打印返回
 def main() -> int:
     args = parse_args()
 
@@ -100,4 +110,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

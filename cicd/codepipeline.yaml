@@ -2,32 +2,41 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: "Native AWS CI/CD for aiAgentCore (CodeCommit + CodePipeline + CodeBuild)"
 
 Parameters:
+  # 源代码仓库名（CodeCommit）
   RepositoryName:
     Type: String
     Default: aiAgentCore
+  # 监听的分支
   BranchName:
     Type: String
     Default: main
+  # Pipeline 名称
   PipelineName:
     Type: String
     Default: aiAgentCore-pipeline
+  # CDK 部署的目标栈名
   StackName:
     Type: String
     Default: InfraStack
+  # 运行时镜像 ECR 仓库名
   RuntimeEcrRepositoryName:
     Type: String
     Default: ai-agentcore-runtime
+  # 默认模型 ID
   ModelId:
     Type: String
     Default: amazon.nova-lite-v1:0
+  # 可选模型 ARN（空表示不用）
   ModelArn:
     Type: String
     Default: ""
+  # 预签名 URL 过期秒数
   PdfUrlExpires:
     Type: String
     Default: "600"
 
 Resources:
+  # Pipeline 构件存储桶
   ArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -39,6 +48,7 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  # CodeBuild 服务角色（当前配置给了管理员权限，便于学习/快速联调）
   CodeBuildServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -64,6 +74,7 @@ Resources:
                   - logs:PutLogEvents
                 Resource: "*"
 
+  # CodePipeline 服务角色
   CodePipelineServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -80,6 +91,7 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # 读取 CodeCommit 源码所需权限
               - Effect: Allow
                 Action:
                   - codecommit:GetBranch
@@ -88,6 +100,7 @@ Resources:
                   - codecommit:GetUploadArchiveStatus
                   - codecommit:CancelUploadArchive
                 Resource: !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${RepositoryName}"
+              # 触发和查询 CodeBuild 项目
               - Effect: Allow
                 Action:
                   - codebuild:BatchGetBuilds
@@ -95,6 +108,7 @@ Resources:
                 Resource:
                   - !GetAtt CiBuildProject.Arn
                   - !GetAtt DeployBuildProject.Arn
+              # 读写 Pipeline 构件桶
               - Effect: Allow
                 Action:
                   - s3:GetObject
@@ -104,12 +118,14 @@ Resources:
                 Resource:
                   - !GetAtt ArtifactBucket.Arn
                   - !Sub "${ArtifactBucket.Arn}/*"
+              # 允许把 CodeBuild 角色传递给 CodeBuild 任务
               - Effect: Allow
                 Action:
                   - iam:PassRole
                 Resource:
                   - !GetAtt CodeBuildServiceRole.Arn
 
+  # CI 阶段：仅做 lint + test
   CiBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -127,6 +143,7 @@ Resources:
         BuildSpec: buildspec-ci.yml
       TimeoutInMinutes: 30
 
+  # 部署阶段：构建镜像 + CDK 部署 + smoke test
   DeployBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -157,6 +174,7 @@ Resources:
         BuildSpec: buildspec-deploy.yml
       TimeoutInMinutes: 90
 
+  # 主 Pipeline：Source -> CI -> Deploy
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:

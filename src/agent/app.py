@@ -1,65 +1,57 @@
 from __future__ import annotations
 
-# JSON 序列化/反序列化
+# 处理 JSON 编解码
 import json
-
-# 标准日志模块
+# 记录结构化日志
 import logging
-
-# 高精度耗时统计
+# 统计函数耗时（高精度计时器）
 from time import perf_counter
-
-# 类型提示
+# 类型标注
 from typing import Any
-
-# 生成全局唯一记录 ID
+# 生成唯一记录 ID
 from uuid import uuid4
 
 # 调用 Bedrock 生成回答
 from agent.llm.bedrock import generate_answer
-
-# 将问答内容渲染为 PDF
+# 把问答内容渲染为 PDF
 from agent.pdf.render import render_pdf
-
-# 读取运行时配置（环境变量）
+# 从环境变量读取运行配置
 from agent.settings import Settings
-
 # 写入 DynamoDB 记录
 from agent.storage.dynamo import put_record
-
 # 处理 S3 key、上传 PDF、生成预签名 URL
 from agent.storage.s3 import build_pdf_s3_key, generate_presigned_pdf_url, upload_pdf
 
-# 当前模块日志器
+# 当前模块的日志器
 LOGGER = logging.getLogger(__name__)
-# 请求体中必须存在的字段
+# 请求体里必须出现的字段
 REQUIRED_FIELDS = ("prompt", "user_id", "session_id", "locale")
 
 
-# 将事件中的 body 统一解析成字典
+# 将事件里的 body 统一解析成字典
 def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
-    # 读取 body 字段（可能不存在）
+    # 读取 body 字段（有些调用可能没有这个字段）
     body = event.get("body")
-    # 没有 body 时，兼容直接传顶层 JSON 的调用
+    # 兼容“直接把 payload 放在顶层”的调用方式
     if body is None:
         return event if isinstance(event, dict) else {}
-    # 如果上游已经是字典，直接返回
+    # 上游已经是字典时，直接返回
     if isinstance(body, dict):
         return body
-    # 如果是字符串，尝试按 JSON 解析
+    # 字符串时按 JSON 解析
     if isinstance(body, str):
         try:
             return json.loads(body)
-        # 非法 JSON 返回空字典，后续统一做参数校验
+        # 非法 JSON 统一返回空字典，交给后续参数校验处理
         except json.JSONDecodeError:
             return {}
-    # 其他未知类型也按空字典处理
+    # 其他未知类型按空字典处理
     return {}
 
 
 # 校验缺失字段，返回缺失字段名列表
 def _validate_payload(payload: dict[str, Any]) -> list[str]:
-    # 字段不存在、为 None、或空字符串都视为缺失
+    # 字段不存在、为 None、或为空字符串时都视为缺失
     return [field for field in REQUIRED_FIELDS if payload.get(field) in (None, "")]
 
 
@@ -69,22 +61,22 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     start = perf_counter()
     # 每次调用分配唯一记录 ID
     record_id = str(uuid4())
-    # 默认状态码先设为 500，后续成功再覆盖
+    # 默认状态码先设为 500，成功后再覆盖
     status_code = 500
 
     try:
-        # 校验请求体必填字段
+        # 先检查必填字段
         missing_fields = _validate_payload(payload)
         if missing_fields:
-            # 参数错误返回 400
+            # 参数问题返回 400
             status_code = 400
             return status_code, {"error": "missing required fields", "missing": missing_fields}
 
-        # 从环境变量加载配置
+        # 读取运行配置
         settings = Settings.from_env()
-        # 调用模型生成回答
+        # 生成 AI 回答
         answer = generate_answer(prompt=payload["prompt"], model_id=settings.model_id)
-        # 将输入输出渲染为 PDF 字节流
+        # 将问题和回答渲染为 PDF 字节
         pdf_bytes = render_pdf(
             record_id=record_id,
             prompt=payload["prompt"],
@@ -93,7 +85,7 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             session_id=payload["session_id"],
             locale=payload["locale"],
         )
-        # 生成 S3 对象键（按年月归档）
+        # 生成按年月分层的 S3 对象 key
         pdf_key = build_pdf_s3_key(record_id)
         # 上传 PDF 到 S3
         upload_pdf(
@@ -101,13 +93,13 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             bucket_name=settings.bucket_name,
             key=pdf_key,
         )
-        # 生成临时下载链接，返回给调用方
+        # 生成临时下载链接给调用方
         pdf_url = generate_presigned_pdf_url(
             bucket_name=settings.bucket_name,
             key=pdf_key,
             expires_in=settings.pdf_url_expires,
         )
-        # 将问答结果和 PDF 键写入 DynamoDB
+        # 将问答结果和 PDF key 写入 DynamoDB
         put_record(
             table_name=settings.table_name,
             record={
@@ -121,19 +113,19 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             },
         )
 
-        # 业务成功，返回 200
+        # 业务成功，返回 200 和结果
         status_code = 200
         return status_code, {
             "record_id": record_id,
             "answer": answer,
             "pdf": {"s3_key": pdf_key, "url": pdf_url},
         }
-    # 兜底异常处理：防止内部错误把堆栈泄露给调用方
+    # 兜底异常：防止内部错误细节泄露给调用方
     except Exception:
-        # 记录异常堆栈到日志
+        # 记录完整异常堆栈到日志
         LOGGER.exception("failed to process invocation")
         status_code = 500
-        # 对外返回通用错误
+        # 对外仅返回通用错误信息
         return status_code, {"error": "internal_server_error"}
     # 无论成功失败都记录耗时日志
     finally:
@@ -143,25 +135,25 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         LOGGER.info(
             json.dumps(
                 {"record_id": record_id, "latency_ms": latency_ms, "status_code": status_code},
-                # 允许日志中保留中文
+                # 保留中文字符，避免转义为 \uXXXX
                 ensure_ascii=False,
             )
         )
 
 
-# AgentCore / Lambda 调用入口（主要 handler）
+# AgentCore / Lambda 调用入口
 def invocations(event: dict[str, Any], context: Any | None = None) -> dict[str, Any]:
-    # 当前实现未使用 context，显式删除避免 lint 警告
+    # 当前实现不需要 context，显式删除避免 lint 警告
     del context
     # 解析请求体
     payload = _parse_body(event)
-    # 执行业务逻辑
+    # 执行核心业务
     status_code, body = handle_invocation(payload)
-    # 返回标准 API 响应结构
+    # 返回标准 HTTP 风格响应结构
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
-        # 返回 JSON 字符串，保留非 ASCII 字符
+        # 返回 JSON 字符串，同时保留非 ASCII 字符
         "body": json.dumps(body, ensure_ascii=False),
     }
 

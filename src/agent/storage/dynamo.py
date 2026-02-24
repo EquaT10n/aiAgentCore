@@ -2,23 +2,22 @@ from __future__ import annotations
 
 # DynamoDB 数值类型推荐使用 Decimal
 from decimal import Decimal
-
-# 类型提示
+# 类型标注
 from typing import Any
 
 # AWS SDK
 import boto3
 
 
-# 将 Python 值递归转换为 DynamoDB AttributeValue 结构
+# 将 Python 值递归转换为 DynamoDB AttributeValue
 def _to_attr_value(value: Any) -> dict[str, Any]:
     # 字符串 -> S
     if isinstance(value, str):
         return {"S": value}
-    # 布尔 -> BOOL
+    # 布尔值 -> BOOL
     if isinstance(value, bool):
         return {"BOOL": value}
-    # 数字 -> N（字符串形式）
+    # 数字 -> N（字符串格式）
     if isinstance(value, (int, float, Decimal)):
         return {"N": str(value)}
     # None -> NULL
@@ -36,9 +35,8 @@ def _to_attr_value(value: Any) -> dict[str, Any]:
 
 # 向指定 DynamoDB 表写入一条记录
 def put_record(table_name: str, record: dict[str, Any], client: Any | None = None) -> None:
-    # 支持传入 mock client；未传则创建真实 client
+    # 支持注入 mock client；不传则创建真实 DynamoDB client
     dynamodb = client or boto3.client("dynamodb")
-    # 将整条记录转换成 AttributeValue map
+    # 整条记录转换成 DynamoDB Item 结构
     item = {key: _to_attr_value(value) for key, value in record.items()}
-    # 执行写入
     dynamodb.put_item(TableName=table_name, Item=item)

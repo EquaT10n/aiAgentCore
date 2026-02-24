@@ -1,0 +1,39 @@
+﻿# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+infra/.venv/
+
+# Test and tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# AWS CDK output
+cdk.out/
+infra/cdk.out/
+
+# Local env files
+.env
+.env.*

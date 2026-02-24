@@ -2,8 +2,7 @@ from __future__ import annotations
 
 # 读取环境变量
 import os
-
-# 轻量不可变配置对象
+# 定义轻量不可变配置对象
 from dataclasses import dataclass
 
 
@@ -14,7 +13,6 @@ def _required_env(name: str) -> str:
     # 空字符串或 None 都视为未配置
     if not value:
         raise ValueError(f"missing required environment variable: {name}")
-    # 返回有效值
     return value
 
 
@@ -27,15 +25,15 @@ class Settings:
     table_name: str
     # S3 Bucket 名
     bucket_name: str
-    # PDF 预签名 URL 过期时间（秒）
+    # PDF 预签名 URL 过期秒数
     pdf_url_expires: int = 600
 
-    # 工厂方法：从环境变量构建 Settings 实例
+    # 工厂方法：从环境变量构建 Settings
     @classmethod
     def from_env(cls) -> Settings:
-        # 可选变量：未提供时默认 600 秒
+        # 可选配置：默认 600 秒
         expires = int(os.getenv("PDF_URL_EXPIRES", "600"))
-        # 必填变量通过 _required_env 校验
+        # 必填项统一走 _required_env 做校验
         return cls(
             model_id=_required_env("MODEL_ID"),
             table_name=_required_env("TABLE_NAME"),

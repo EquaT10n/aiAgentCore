@@ -1,35 +1,33 @@
-# 工作流名称：手动验证 GitHub OIDC 到 AWS 的联邦登录是否正常
+# 工作流名称：用于手动验证 GitHub OIDC 联邦登录 AWS
 name: oidc-test
 
-# 触发条件：仅支持手动触发，避免频繁自动执行
+# 仅允许手动触发，避免日常提交频繁执行
 on:
   workflow_dispatch:
 
-# 定义测试作业
 jobs:
   test:
-    # 使用 Ubuntu Runner
     runs-on: ubuntu-latest
-    # 授权最小权限：需要 id-token 才能做 OIDC 交换
+    # 最小权限：需要 id-token 才能完成 OIDC 交换
     permissions:
       id-token: write
       contents: read
     steps:
-      # 打印触发上下文，方便排查分支/仓库/事件问题
+      # 打印触发上下文，便于排查分支/事件问题
       - name: Debug trigger context
         run: |
           echo "event_name=${{ github.event_name }}"
           echo "repository=${{ github.repository }}"
           echo "ref=${{ github.ref }}"
 
-      # 拉取代码（有些后续步骤依赖仓库内容）
+      # 拉取仓库
       - uses: actions/checkout@v4
 
-      # 通过 OIDC 获取 AWS 临时凭证
+      # 通过 OIDC 扮演目标 IAM Role
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::765936999892:role/GitHubActions-Deploy-InfraRole
           aws-region: ap-northeast-1
 
-      # 打印当前身份，确认确实成功扮演了目标角色
+      # 输出当前 AWS 身份，确认联邦登录成功
       - run: aws sts get-caller-identity

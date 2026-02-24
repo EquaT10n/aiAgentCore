@@ -1,14 +1,18 @@
+# Buildspec 版本
 version: 0.2
 
 env:
+  # 明确使用 bash，便于使用 set -euo pipefail / heredoc
   shell: bash
 
 phases:
   install:
     runtime-versions:
+      # 安装 Python 与 Node（CDK CLI 依赖 Node）
       python: 3.11
       nodejs: 20
     commands:
+      # 严格模式：任一步失败都立即停止
       - set -euo pipefail
       - python -m pip install --upgrade pip
       - pip install ruff pytest
@@ -18,8 +22,10 @@ phases:
   pre_build:
     commands:
       - set -euo pipefail
+      # 部署前先过质量门禁
       - ruff check .
       - pytest -q
+      # 确保 ECR 仓库存在，并将结果写到 .deploy.env 供后续阶段复用
       - |
         REPO_NAME="${RUNTIME_ECR_REPO_NAME:-ai-agentcore-runtime}"
         if ! aws ecr describe-repositories --repository-names "${REPO_NAME}" >/dev/null 2>&1; then
@@ -37,10 +43,14 @@ phases:
       - set -euo pipefail
       - source "${CODEBUILD_SRC_DIR}/.deploy.env"
       - AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION}}"
+      # 用 commit + build number 生成镜像 tag，确保可追溯
       - IMAGE_TAG="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}-${CODEBUILD_BUILD_NUMBER}"
+      # 登录 ECR
       - aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REPO_URI%/*}"
+      # 构建 ARM64 镜像并做依赖自检
       - docker build --platform linux/arm64 --file src/agent/Dockerfile --tag "${REPO_URI}:${IMAGE_TAG}" src/agent
       - docker run --rm --platform linux/arm64 "${REPO_URI}:${IMAGE_TAG}" python -c "import boto3, reportlab; print('deps_ok', boto3.__version__)"
+      # 推送镜像并拿到不可变摘要引用
       - docker push "${REPO_URI}:${IMAGE_TAG}"
       - IMAGE_REF="$(docker image inspect --format='{{index .RepoDigests 0}}' "${REPO_URI}:${IMAGE_TAG}")"
       - echo "IMAGE_TAG=${IMAGE_TAG}" >> "${CODEBUILD_SRC_DIR}/.deploy.env"
@@ -52,10 +62,12 @@ phases:
       - set -euo pipefail
       - source "${CODEBUILD_SRC_DIR}/.deploy.env"
       - AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION}}"
+      # 部署参数提供默认值，支持参数化
       - MODEL_ID="${MODEL_ID:-amazon.nova-lite-v1:0}"
       - MODEL_ARN="${MODEL_ARN:-}"
       - PDF_URL_EXPIRES="${PDF_URL_EXPIRES:-600}"
       - STACK_NAME="${STACK_NAME:-InfraStack}"
+      # synth + deploy CDK 栈
       - |
         cd infra
         python -m venv .venv
@@ -75,6 +87,7 @@ phases:
           -c model_id="${MODEL_ID}" \
           -c model_arn="${MODEL_ARN}" \
           -c pdf_url_expires="${PDF_URL_EXPIRES}"
+      # 部署后做一次真实 smoke 调用，验证端到端可用
       - |
         export STACK_NAME AWS_REGION
         python - <<'PY'

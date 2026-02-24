@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-# 时间戳用于按年月分区对象路径
+# 获取 UTC 时间，用于按年月分目录
 from datetime import UTC, datetime
-
-# 类型提示
+# 类型标注
 from typing import Any
 
 # AWS SDK
 import boto3
 
 
-# 根据记录 ID 生成 PDF 对象键：pdf/YYYY/MM/<record_id>.pdf
+# 根据 record_id 生成 S3 key：pdf/YYYY/MM/<record_id>.pdf
 def build_pdf_s3_key(record_id: str, now: datetime | None = None) -> str:
-    # 支持注入 now（便于测试），未传则取当前 UTC 时间
+    # 支持注入 now（便于测试）；不传就用当前 UTC 时间
     ts = now or datetime.now(UTC)
-    # 按年月分层目录，便于管理与生命周期策略
     return f"pdf/{ts:%Y/%m}/{record_id}.pdf"
 
 
@@ -25,26 +23,22 @@ def upload_pdf(
     key: str,
     client: Any | None = None,
 ) -> None:
-    # 支持传入 mock client；未传则创建真实 client
+    # 支持注入 mock client；不传则创建真实 S3 client
     s3 = client or boto3.client("s3")
-    # 写入对象并显式标注内容类型为 PDF
     s3.put_object(Bucket=bucket_name, Key=key, Body=pdf_bytes, ContentType="application/pdf")
 
 
-# 生成 PDF 下载预签名 URL
+# 为 PDF 生成限时下载链接
 def generate_presigned_pdf_url(
     bucket_name: str,
     key: str,
     expires_in: int = 600,
     client: Any | None = None,
 ) -> str:
-    # 支持传入 mock client；未传则创建真实 client
+    # 支持注入 mock client；不传则创建真实 S3 client
     s3 = client or boto3.client("s3")
-    # 为 get_object 生成限时 URL
     return s3.generate_presigned_url(
         "get_object",
-        # 目标对象定位参数
         Params={"Bucket": bucket_name, "Key": key},
-        # 过期时间（秒）
         ExpiresIn=expires_in,
     )
