@@ -38,6 +38,8 @@ class InfraStack(Stack):
         existing_ecr_repository_name = self.node.try_get_context("existing_ecr_repository_name")
         # 读取镜像 tag，默认 latest
         runtime_image_tag = self.node.try_get_context("runtime_image_tag") or "latest"
+        # 可选：直接传入不可变镜像引用（例如 repo@sha256:...），优先级高于 tag
+        runtime_image_ref = self.node.try_get_context("runtime_image_ref")
         # 读取模型 ID，未传则使用默认 Claude 模型
         model_id = self.node.try_get_context("model_id") or (
             "anthropic.claude-3-5-sonnet-20241022-v2:0"
@@ -165,6 +167,12 @@ class InfraStack(Stack):
         )
 
         # 创建 AgentCore Runtime 资源（容器运行时定义）
+        container_image_uri = (
+            str(runtime_image_ref)
+            if runtime_image_ref
+            else f"{runtime_repo.repository_uri}:{runtime_image_tag}"
+        )
+
         runtime = bedrockagentcore.CfnRuntime(
             self,
             "AgentRuntime",
@@ -179,7 +187,7 @@ class InfraStack(Stack):
             # 指定容器镜像来源（ECR URI + tag）
             agent_runtime_artifact=bedrockagentcore.CfnRuntime.AgentRuntimeArtifactProperty(
                 container_configuration=bedrockagentcore.CfnRuntime.ContainerConfigurationProperty(
-                    container_uri=f"{runtime_repo.repository_uri}:{runtime_image_tag}"
+                    container_uri=container_image_uri
                 )
             ),
             # 注入运行时环境变量（应用代码读取）
