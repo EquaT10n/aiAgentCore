@@ -163,53 +163,101 @@ jobs:
           STACK_NAME="InfraStack"
           # 读取栈输出（JSON）
           STACK_OUTPUTS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].Outputs" --output json)"
-          # InvokeAgentRuntime 需要 ARN + accountId（runtimeId 会触发 400）
+          # InvokeAgentRuntime 使用 ARN + endpoint qualifier
           RUNTIME_ARN="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeArn") | .OutputValue' | head -n1)"
           ENDPOINT_NAME="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointName") | .OutputValue' | head -n1)"
-          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           if [ -z "${RUNTIME_ARN}" ] || [ "${RUNTIME_ARN}" = "None" ] || [ -z "${ENDPOINT_NAME}" ] || [ "${ENDPOINT_NAME}" = "None" ]; then
             echo "Missing required stack outputs: AgentRuntimeArn or AgentRuntimeEndpointName"
             echo "${STACK_OUTPUTS}"
             exit 1
           fi
-          RUNTIME_ARN_ENCODED="$(printf '%s' "${RUNTIME_ARN}" | jq -sRr @uri)"
-          URL="https://bedrock-agentcore.${AWS_REGION}.amazonaws.com/runtimes/${RUNTIME_ARN_ENCODED}/invocations?accountId=${ACCOUNT_ID}&qualifier=${ENDPOINT_NAME}"
-          # 构造最小请求体
-          PAYLOAD='{"body":{"prompt":"smoke ping","user_id":"gha","session_id":"deploy-smoke","locale":"zh-CN"}}'
+          export RUNTIME_ARN ENDPOINT_NAME
+          python - <<'PY'
+          import io
+          import json
+          import os
+          import sys
+          import time
 
-          # 最多重试 6 次（每次间隔 10 秒），应对刚部署完成的短暂冷启动
-          for i in 1 2 3 4 5 6; do
-            # 使用 AWS SigV4 对请求签名，发起带临时凭证的调用
-            HTTP_CODE="$(curl --silent --show-error \
-              --aws-sigv4 "aws:amz:${AWS_REGION}:bedrock-agentcore" \
-              --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
-              -H "x-amz-security-token: ${AWS_SESSION_TOKEN}" \
-              -H "content-type: application/json" \
-              -d "${PAYLOAD}" \
-              --output response.json \
-              --write-out "%{http_code}" \
-              "${URL}")"
-            if [ "${HTTP_CODE}" = "200" ]; then
-              break
-            fi
-            echo "Smoke attempt ${i} failed (HTTP ${HTTP_CODE})"
-            cat response.json || true
-            # 最后一次仍失败则让作业失败
-            if [ "$i" -eq 6 ]; then
-              exit 1
-            fi
-            # 等待后重试
-            sleep 10
-          done
+          import boto3
 
-          # 校验响应：状态码正常且包含关键业务字段
-          jq -e '
-            def body_obj:
-              if has("body") then
-                if (.body | type) == "string" then (.body | fromjson) else .body end
-              else
-                .
-              end;
-            ((has("statusCode") | not) or (.statusCode == 200))
-            and ((body_obj | .record_id and .answer and .pdf.s3_key and .pdf.url))
-          ' response.json >/dev/null
+          runtime_arn = os.environ["RUNTIME_ARN"]
+          endpoint_name = os.environ["ENDPOINT_NAME"]
+          region = os.environ["AWS_REGION"]
+          payload = {
+              "body": {
+                  "prompt": "smoke ping",
+                  "user_id": "gha",
+                  "session_id": "deploy-smoke",
+                  "locale": "zh-CN",
+              }
+          }
+
+          client = boto3.client("bedrock-agentcore", region_name=region)
+
+          def decode_response_blob(blob: object) -> dict:
+              if isinstance(blob, (bytes, bytearray)):
+                  raw = bytes(blob).decode("utf-8")
+                  return json.loads(raw)
+              if hasattr(blob, "read"):
+                  raw = blob.read().decode("utf-8")
+                  return json.loads(raw)
+              if isinstance(blob, io.IOBase):
+                  raw = blob.read().decode("utf-8")
+                  return json.loads(raw)
+              if hasattr(blob, "__iter__"):
+                  chunks = []
+                  for event in blob:
+                      chunk = event.get("chunk") if isinstance(event, dict) else None
+                      if isinstance(chunk, dict) and "bytes" in chunk:
+                          chunks.append(chunk["bytes"])
+                  if chunks:
+                      raw = b"".join(chunks).decode("utf-8")
+                      return json.loads(raw)
+              if isinstance(blob, str):
+                  return json.loads(blob)
+              raise TypeError(f"Unsupported response payload type: {type(blob)!r}")
+
+          last_error = None
+          response_json = None
+          for i in range(1, 7):
+              try:
+                  resp = client.invoke_agent_runtime(
+                      agentRuntimeArn=runtime_arn,
+                      qualifier=endpoint_name,
+                      payload=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                      contentType="application/json",
+                  )
+                  response_json = decode_response_blob(resp.get("response"))
+                  with open("response.json", "w", encoding="utf-8") as f:
+                      json.dump(response_json, f, ensure_ascii=False)
+                  break
+              except Exception as exc:  # noqa: BLE001
+                  last_error = exc
+                  print(f"Smoke attempt {i} failed ({exc.__class__.__name__}): {exc}")
+                  if i == 6:
+                      raise
+                  time.sleep(10)
+
+          if response_json is None:
+              print(f"Smoke failed without response object, last error: {last_error}")
+              sys.exit(1)
+
+          body_obj = response_json.get("body", response_json)
+          if isinstance(body_obj, str):
+              body_obj = json.loads(body_obj)
+
+          ok_status = ("statusCode" not in response_json) or (response_json.get("statusCode") == 200)
+          required = bool(
+              isinstance(body_obj, dict)
+              and body_obj.get("record_id")
+              and body_obj.get("answer")
+              and isinstance(body_obj.get("pdf"), dict)
+              and body_obj["pdf"].get("s3_key")
+              and body_obj["pdf"].get("url")
+          )
+          if not (ok_status and required):
+              print("Smoke response validation failed.")
+              print(json.dumps(response_json, ensure_ascii=False, indent=2))
+              sys.exit(1)
+          PY
