@@ -105,13 +105,14 @@ jobs:
         # 步骤输出 ID
         id: build
         env:
-          # 用当前 commit sha 作为镜像 tag，保证可追溯
-          IMAGE_TAG: ${{ github.sha }}
+          # 用 sha + run_id 作为镜像 tag，确保每次 workflow 都触发 runtime 镜像更新
+          IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}
         run: |
           set -euo pipefail
           # 使用 buildx 构建并直接 push 到 ECR
           docker buildx build \
             --platform linux/arm64 \
+            --pull \
             --file src/agent/Dockerfile \
             --tag "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}" \
             --push \
