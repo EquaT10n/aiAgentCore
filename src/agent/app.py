@@ -1,19 +1,19 @@
-from __future__ import annotations
+"""AgentCore 调用入口模块。
 
-"""
-AgentCore 调用入口模块。
-
-本模块主要负责：
+本模块负责：
 1) 解析并校验调用请求。
 2) 通过 LLM 路由器选择工具并执行。
 3) 执行业务主链路（回答 -> PDF -> S3 -> DynamoDB）。
 4) 返回兼容 AgentCore/Lambda 的 HTTP 风格响应。
 """
 
+from __future__ import annotations
+
 import json
 import logging
+from collections.abc import Callable
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 from agent.llm.bedrock import generate_answer
@@ -51,11 +51,7 @@ def _tool_bullet_summary(tool_input: dict[str, Any], settings: Settings) -> str:
     return generate_answer(prompt=summary_prompt, model_id=settings.model_id)
 
 
-# 工具注册表：统一维护
-# - 可用工具名
-# - 工具描述（供路由提示词使用）
-# - 输入 schema 约束
-# - 实际处理函数
+# 工具注册表：统一维护可用工具、输入约束和处理函数。
 TOOLS: dict[str, dict[str, Any]] = {
     "direct_answer": {
         "description": "Return a direct answer to the user prompt.",
@@ -71,15 +67,7 @@ TOOLS: dict[str, dict[str, Any]] = {
 
 
 def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
-    """将调用事件统一归一化为 dict。
-
-    支持输入格式：
-    - {"body": <dict>}：直接返回 body
-    - {"body": <json 字符串>}：解析后返回
-    - 顶层原始 dict（无 body）：视为 payload 直接返回
-
-    无效/不支持的输入统一返回 {}，交由后续校验处理。
-    """
+    """将调用事件统一归一化为 dict。"""
     body = event.get("body")
     if body is None:
         return event if isinstance(event, dict) else {}
@@ -94,18 +82,12 @@ def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_payload(payload: dict[str, Any]) -> list[str]:
-    """返回缺失的必填字段列表。
-
-    空字符串与 None 都视为缺失。
-    """
+    """返回缺失的必填字段；空字符串和 None 都视为缺失。"""
     return [field for field in REQUIRED_FIELDS if payload.get(field) in (None, "")]
 
 
 def _validate_tool_input(tool_name: str, tool_input: Any) -> list[str]:
-    """按工具注册表定义的 schema 校验输入。
-
-    返回错误列表；空列表表示校验通过。
-    """
+    """按工具注册表定义的 schema 校验输入，返回错误列表。"""
     if tool_name not in TOOLS:
         return [f"unknown tool: {tool_name}"]
     if not isinstance(tool_input, dict):
@@ -123,11 +105,7 @@ def _validate_tool_input(tool_name: str, tool_input: Any) -> list[str]:
 
 
 def _build_router_prompt(user_prompt: str, scratchpad: list[dict[str, Any]]) -> str:
-    """构造严格路由提示词。
-
-    路由器必须只输出 JSON，便于运行时代码安全解析。
-    scratchpad 里包含前序工具输出摘要，用于支持多步路由。
-    """
+    """构造严格路由提示词，要求模型仅返回 JSON。"""
     tools_desc = [
         {
             "tool": name,
@@ -150,13 +128,12 @@ def _build_router_prompt(user_prompt: str, scratchpad: list[dict[str, Any]]) -> 
     )
 
 
-def _route_once(user_prompt: str, settings: Settings, scratchpad: list[dict[str, Any]]) -> dict[str, Any]:
-    """执行一次 LLM 路由并归一化输出。
-
-    兜底策略：
-    - 路由结果不是合法 JSON 时，强制回退到 direct_answer。
-    - 当 action=final 且 answer 为文本时，结束工具执行。
-    """
+def _route_once(
+    user_prompt: str,
+    settings: Settings,
+    scratchpad: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """执行一次 LLM 路由并归一化输出。"""
     router_prompt = _build_router_prompt(user_prompt=user_prompt, scratchpad=scratchpad)
     router_raw = generate_answer(prompt=router_prompt, model_id=settings.model_id)
     try:
@@ -176,21 +153,16 @@ def _route_once(user_prompt: str, settings: Settings, scratchpad: list[dict[str,
     tool = str(decision.get("tool", "")).strip()
     tool_input = decision.get("tool_input", {})
     if isinstance(tool_input, dict) and "prompt" not in tool_input:
-        # 确保当前所有工具的最小输入约束都满足。
         tool_input["prompt"] = user_prompt
 
     return {"action": "call_tool", "tool": tool, "tool_input": tool_input}
 
 
-def _run_tool_routing(user_prompt: str, settings: Settings) -> tuple[str, str, list[dict[str, Any]]]:
-    """执行“路由-工具”循环，返回 (tool_name, answer, trace)。
-
-    行为说明：
-    - 最多执行 MAX_ROUTER_STEPS 次。
-    - 每步执行：路由 -> 校验 -> 工具调用 -> 更新 scratchpad/trace。
-    - 达到步数上限后，优先返回最后一次有效工具输出。
-    - 若没有可用输出，则回退到 direct_answer。
-    """
+def _run_tool_routing(
+    user_prompt: str,
+    settings: Settings,
+) -> tuple[str, str, list[dict[str, Any]]]:
+    """执行“路由-工具”循环，返回 (tool_name, answer, trace)。"""
     trace: list[dict[str, Any]] = []
     scratchpad: list[dict[str, Any]] = []
     last_tool = "direct_answer"
@@ -221,7 +193,7 @@ def _run_tool_routing(user_prompt: str, settings: Settings) -> tuple[str, str, l
                     "errors": errors,
                 }
             )
-            # 不因为路由器输出格式问题而让整个请求失败。
+            # 不因路由器格式错误让请求直接失败。
             tool_name = "direct_answer"
             tool_input = {"prompt": user_prompt}
 
@@ -256,20 +228,7 @@ def _run_tool_routing(user_prompt: str, settings: Settings) -> tuple[str, str, l
 
 
 def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """单次调用的业务主流程。
-
-    成功路径：
-    1) 校验请求参数
-    2) 执行工具路由并生成回答
-    3) 渲染 PDF
-    4) 上传 S3 并生成预签名 URL
-    5) 持久化到 DynamoDB
-    6) 返回响应体
-
-    失败路径：
-    - 参数错误返回 400
-    - 内部异常返回 500
-    """
+    """单次调用的业务主流程。"""
     start = perf_counter()
     record_id = str(uuid4())
     status_code = 500
@@ -345,15 +304,7 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
 
 
 def invocations(event: dict[str, Any], context: Any | None = None) -> dict[str, Any]:
-    """AgentCore/Lambda 兼容入口。
-
-    返回 HTTP 风格字典：
-    {
-      "statusCode": int,
-      "headers": {"Content-Type": "application/json"},
-      "body": "<json 字符串>"
-    }
-    """
+    """AgentCore/Lambda 兼容入口，统一返回 HTTP 风格响应。"""
     del context
     payload = _parse_body(event)
     status_code, body = handle_invocation(payload)

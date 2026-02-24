@@ -2,18 +2,25 @@ from __future__ import annotations
 
 # CDK 主模块
 import aws_cdk as cdk
+
 # 常用 CDK 基础构件
 from aws_cdk import CfnOutput, Duration, Stack
+
 # Bedrock AgentCore 资源
 from aws_cdk import aws_bedrockagentcore as bedrockagentcore
+
 # DynamoDB 资源
 from aws_cdk import aws_dynamodb as dynamodb
+
 # ECR 资源
 from aws_cdk import aws_ecr as ecr
+
 # IAM 资源
 from aws_cdk import aws_iam as iam
+
 # S3 资源
 from aws_cdk import aws_s3 as s3
+
 # CDK 构造树基类
 from constructs import Construct
 

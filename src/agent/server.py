@@ -2,10 +2,13 @@ from __future__ import annotations
 
 # JSON 解析与序列化
 import json
+
 # 读取端口环境变量
 import os
+
 # 内置 HTTP 服务
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 # 类型标注
 from typing import Any
 

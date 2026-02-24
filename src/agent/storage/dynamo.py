@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # DynamoDB 数值类型推荐使用 Decimal
 from decimal import Decimal
+
 # 类型标注
 from typing import Any
 

@@ -2,15 +2,19 @@ from __future__ import annotations
 
 # 解析 JSON 响应体
 import json
+
 # 构造固定 UUID，保证测试可重复
 import uuid
+
 # 固定时间输入（UTC）
 from datetime import UTC, datetime
 
 # 被测业务入口
 from agent import app
+
 # 被测 PDF 渲染函数
 from agent.pdf.render import render_pdf
+
 # 被测 S3 key 生成函数
 from agent.storage.s3 import build_pdf_s3_key
 
