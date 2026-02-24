@@ -137,6 +137,18 @@ class InfraStack(Stack):
             )
         )
         runtime_repo.grant_pull(runtime_role)
+        runtime_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:DescribeLogGroups",
+                    "logs:DescribeLogStreams",
+                    "logs:PutLogEvents",
+                ],
+                resources=["*"],
+            )
+        )
         # 授予写入 DynamoDB 权限（保存问答记录）
         runtime_role.add_to_policy(
             iam.PolicyStatement(
