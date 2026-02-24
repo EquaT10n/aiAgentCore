@@ -300,20 +300,20 @@ jobs:
                               logGroupName=group,
                               startTime=start_ms,
                               endTime=end_ms,
-                              limit=50,
+                              limit=200,
                           ).get("events", [])
                       except Exception as inner_exc:  # noqa: BLE001
                           print(f"CloudWatch diagnostic read failed for {group}: {inner_exc}")
                           continue
-                      matched = []
-                      for ev in events:
-                          msg = ev.get("message", "")
-                          if runtime_id_hint in msg or endpoint_name in msg or "error" in msg.lower():
-                              matched.append(msg.strip())
-                      if matched:
-                          print(f"CloudWatch diagnostic events from {group}:")
-                          for line in matched[-20:]:
-                              print(line)
+                      if not events:
+                          continue
+                      print(f"CloudWatch diagnostic recent events from {group}:")
+                      for ev in events[-30:]:
+                          msg = (ev.get("message", "") or "").strip()
+                          if not msg:
+                              continue
+                          ts = ev.get("timestamp")
+                          print(f"[{ts}] {msg}")
               except Exception as exc:  # noqa: BLE001
                   print(f"CloudWatch diagnostic failed: {exc}")
 
