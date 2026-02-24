@@ -10,6 +10,9 @@ on:
     paths:
       - "infra/**"
       - "src/agent/**"
+      - "scripts/**"
+      - "buildspec-*.yml"
+      - "cicd/**"
       - ".github/workflows/deploy_infra.yml"
   workflow_dispatch:
 
