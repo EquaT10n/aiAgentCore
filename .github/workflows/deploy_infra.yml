@@ -188,6 +188,17 @@ jobs:
                   "${ENDPOINT_ARN}",
                   "${RUNTIME_ARN}/runtime-endpoint/*"
                 ]
+              },
+              {
+                "Sid": "AllowReadCloudWatchLogsForSmokeDiagnostics",
+                "Effect": "Allow",
+                "Action": [
+                  "logs:DescribeLogGroups",
+                  "logs:DescribeLogStreams",
+                  "logs:FilterLogEvents",
+                  "logs:GetLogEvents"
+                ],
+                "Resource": "*"
               }
             ]
           }
