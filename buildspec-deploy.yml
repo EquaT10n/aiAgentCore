@@ -1,0 +1,200 @@
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+      nodejs: 20
+    commands:
+      - set -euo pipefail
+      - python -m pip install --upgrade pip
+      - pip install ruff pytest
+      - pip install -e .
+      - npm i -g aws-cdk
+
+  pre_build:
+    commands:
+      - set -euo pipefail
+      - ruff check .
+      - pytest -q
+      - |
+        REPO_NAME="${RUNTIME_ECR_REPO_NAME:-ai-agentcore-runtime}"
+        if ! aws ecr describe-repositories --repository-names "${REPO_NAME}" >/dev/null 2>&1; then
+          aws ecr create-repository --repository-name "${REPO_NAME}" >/dev/null
+        fi
+        ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+        AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION}}"
+        REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}"
+        echo "REPO_NAME=${REPO_NAME}" >> "${CODEBUILD_SRC_DIR}/.deploy.env"
+        echo "REPO_URI=${REPO_URI}" >> "${CODEBUILD_SRC_DIR}/.deploy.env"
+      - cat "${CODEBUILD_SRC_DIR}/.deploy.env"
+
+  build:
+    commands:
+      - set -euo pipefail
+      - source "${CODEBUILD_SRC_DIR}/.deploy.env"
+      - AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION}}"
+      - IMAGE_TAG="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}-${CODEBUILD_BUILD_NUMBER}"
+      - aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REPO_URI%/*}"
+      - docker build --platform linux/arm64 --file src/agent/Dockerfile --tag "${REPO_URI}:${IMAGE_TAG}" src/agent
+      - docker run --rm --platform linux/arm64 "${REPO_URI}:${IMAGE_TAG}" python -c "import boto3, reportlab; print('deps_ok', boto3.__version__)"
+      - docker push "${REPO_URI}:${IMAGE_TAG}"
+      - IMAGE_REF="$(docker image inspect --format='{{index .RepoDigests 0}}' "${REPO_URI}:${IMAGE_TAG}")"
+      - echo "IMAGE_TAG=${IMAGE_TAG}" >> "${CODEBUILD_SRC_DIR}/.deploy.env"
+      - echo "IMAGE_REF=${IMAGE_REF}" >> "${CODEBUILD_SRC_DIR}/.deploy.env"
+      - echo "Built image ref: ${IMAGE_REF}"
+
+  post_build:
+    commands:
+      - set -euo pipefail
+      - source "${CODEBUILD_SRC_DIR}/.deploy.env"
+      - AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION}}"
+      - MODEL_ID="${MODEL_ID:-amazon.nova-lite-v1:0}"
+      - MODEL_ARN="${MODEL_ARN:-}"
+      - PDF_URL_EXPIRES="${PDF_URL_EXPIRES:-600}"
+      - STACK_NAME="${STACK_NAME:-InfraStack}"
+      - |
+        cd infra
+        python -m venv .venv
+        source .venv/bin/activate
+        pip install -r requirements.txt
+        cdk synth \
+          -c existing_ecr_repository_name="${REPO_NAME}" \
+          -c runtime_image_tag="${IMAGE_TAG}" \
+          -c runtime_image_ref="${IMAGE_REF}" \
+          -c model_id="${MODEL_ID}" \
+          -c model_arn="${MODEL_ARN}" \
+          -c pdf_url_expires="${PDF_URL_EXPIRES}"
+        cdk deploy --all --require-approval never \
+          -c existing_ecr_repository_name="${REPO_NAME}" \
+          -c runtime_image_tag="${IMAGE_TAG}" \
+          -c runtime_image_ref="${IMAGE_REF}" \
+          -c model_id="${MODEL_ID}" \
+          -c model_arn="${MODEL_ARN}" \
+          -c pdf_url_expires="${PDF_URL_EXPIRES}"
+      - |
+        export STACK_NAME AWS_REGION
+        python - <<'PY'
+        import io
+        import json
+        import os
+        import sys
+        import time
+        from datetime import datetime, timedelta, timezone
+
+        import boto3
+
+        stack_name = os.environ["STACK_NAME"]
+        region = os.environ["AWS_REGION"]
+
+        cfn = boto3.client("cloudformation", region_name=region)
+        outputs = cfn.describe_stacks(StackName=stack_name)["Stacks"][0].get("Outputs", [])
+        out = {item["OutputKey"]: item["OutputValue"] for item in outputs}
+        runtime_arn = out.get("AgentRuntimeArn")
+        endpoint_name = out.get("AgentRuntimeEndpointName")
+        if not runtime_arn or not endpoint_name:
+            raise RuntimeError("Missing AgentRuntimeArn or AgentRuntimeEndpointName from stack outputs")
+
+        payload = {
+            "prompt": "smoke ping",
+            "user_id": "codebuild",
+            "session_id": f"deploy-smoke-{int(time.time())}",
+            "locale": "zh-CN",
+        }
+
+        client = boto3.client("bedrock-agentcore", region_name=region)
+        logs_client = boto3.client("logs", region_name=region)
+
+        def decode_response_blob(blob: object) -> dict:
+            if isinstance(blob, (bytes, bytearray)):
+                return json.loads(bytes(blob).decode("utf-8"))
+            if hasattr(blob, "read"):
+                return json.loads(blob.read().decode("utf-8"))
+            if isinstance(blob, io.IOBase):
+                return json.loads(blob.read().decode("utf-8"))
+            if isinstance(blob, str):
+                return json.loads(blob)
+            if hasattr(blob, "__iter__"):
+                chunks = []
+                for event in blob:
+                    chunk = event.get("chunk") if isinstance(event, dict) else None
+                    if isinstance(chunk, dict) and "bytes" in chunk:
+                        chunks.append(chunk["bytes"])
+                if chunks:
+                    return json.loads(b"".join(chunks).decode("utf-8"))
+            raise TypeError(f"Unsupported response payload type: {type(blob)!r}")
+
+        def dump_recent_logs() -> None:
+            now = datetime.now(timezone.utc)
+            start_ms = int((now - timedelta(minutes=5)).timestamp() * 1000)
+            end_ms = int(now.timestamp() * 1000)
+            paginator = logs_client.get_paginator("describe_log_groups")
+            groups = []
+            for page in paginator.paginate():
+                for g in page.get("logGroups", []):
+                    name = g.get("logGroupName", "")
+                    if "bedrock-agentcore/runtimes/" in name:
+                        groups.append(name)
+            print("CloudWatch diagnostic log groups:")
+            for name in groups[:20]:
+                print(f"  - {name}")
+            for group in groups[:5]:
+                events = logs_client.filter_log_events(
+                    logGroupName=group,
+                    startTime=start_ms,
+                    endTime=end_ms,
+                    limit=100,
+                ).get("events", [])
+                if not events:
+                    continue
+                print(f"CloudWatch diagnostic recent events from {group}:")
+                for ev in events[-30:]:
+                    msg = (ev.get("message", "") or "").strip()
+                    if msg:
+                        print(f"[{ev.get('timestamp')}] {msg}")
+
+        response_json = None
+        last_error = None
+        for i in range(1, 7):
+            try:
+                resp = client.invoke_agent_runtime(
+                    agentRuntimeArn=runtime_arn,
+                    qualifier=endpoint_name,
+                    payload=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    contentType="application/json",
+                )
+                response_json = decode_response_blob(resp.get("response"))
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                print(f"Smoke attempt {i} failed ({exc.__class__.__name__}): {exc}")
+                if i == 6:
+                    dump_recent_logs()
+                    raise
+                time.sleep(10)
+
+        if response_json is None:
+            print(f"Smoke failed without response object, last error: {last_error}")
+            sys.exit(1)
+
+        body_obj = response_json.get("body", response_json)
+        if isinstance(body_obj, str):
+            body_obj = json.loads(body_obj)
+
+        ok_status = ("statusCode" not in response_json) or (response_json.get("statusCode") == 200)
+        required = bool(
+            isinstance(body_obj, dict)
+            and body_obj.get("record_id")
+            and body_obj.get("answer")
+            and isinstance(body_obj.get("pdf"), dict)
+            and body_obj["pdf"].get("s3_key")
+            and body_obj["pdf"].get("url")
+        )
+        if not (ok_status and required):
+            print("Smoke response validation failed.")
+            print(json.dumps(response_json, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        PY
