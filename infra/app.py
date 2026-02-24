@@ -42,7 +42,7 @@ class InfraStack(Stack):
         runtime_image_ref = self.node.try_get_context("runtime_image_ref")
         # 读取模型 ID，未传则使用默认 Claude 模型
         model_id = self.node.try_get_context("model_id") or (
-            "anthropic.claude-3-5-sonnet-20241022-v2:0"
+            "amazon.nova-lite-v1:0"
         )
         # 读取模型 ARN（可选，优先级高于 model_id 拼 ARN）
         model_arn = self.node.try_get_context("model_arn")

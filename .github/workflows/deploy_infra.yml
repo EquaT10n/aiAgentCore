@@ -156,7 +156,7 @@ jobs:
             -c existing_ecr_repository_name=${{ steps.ecr.outputs.repo_name }} \
             -c runtime_image_tag=${{ steps.build.outputs.image_tag }} \
             -c runtime_image_ref="${{ steps.build.outputs.image_ref }}" \
-            -c model_id="${MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}" \
+            -c model_id="${MODEL_ID:-amazon.nova-lite-v1:0}" \
             -c model_arn="${MODEL_ARN:-}" \
             -c pdf_url_expires="${PDF_URL_EXPIRES:-600}"
           # 正式部署所有栈，且关闭人工审批（CI 场景）
@@ -164,7 +164,7 @@ jobs:
             -c existing_ecr_repository_name=${{ steps.ecr.outputs.repo_name }} \
             -c runtime_image_tag=${{ steps.build.outputs.image_tag }} \
             -c runtime_image_ref="${{ steps.build.outputs.image_ref }}" \
-            -c model_id="${MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}" \
+            -c model_id="${MODEL_ID:-amazon.nova-lite-v1:0}" \
             -c model_arn="${MODEL_ARN:-}" \
             -c pdf_url_expires="${PDF_URL_EXPIRES:-600}"
 
