@@ -175,6 +175,10 @@ class InfraStack(Stack):
         endpoint_deploy_marker = (str(runtime_image_tag) if runtime_image_tag else "latest")[:48]
         if runtime_image_ref:
             endpoint_deploy_marker = str(runtime_image_ref).split("@")[-1][:48]
+        endpoint_description = (
+            "Primary endpoint for ai-agentcore runtime. "
+            f"marker={endpoint_deploy_marker}"
+        )
 
         runtime = bedrockagentcore.CfnRuntime(
             self,
@@ -214,7 +218,7 @@ class InfraStack(Stack):
             # 端点名称，用作 qualifier
             name="prod",
             # 端点说明（包含镜像 marker，确保镜像变更时 endpoint 也发生更新）
-            description=f"Primary endpoint for ai-agentcore runtime. marker={endpoint_deploy_marker}",
+            description=endpoint_description,
         )
         # 显式依赖：确保先创建 runtime 再创建 endpoint
         runtime_endpoint.add_dependency(runtime)
