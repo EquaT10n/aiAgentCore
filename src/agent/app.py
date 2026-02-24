@@ -1,82 +1,291 @@
 from __future__ import annotations
 
-# 处理 JSON 编解码
+"""
+AgentCore 调用入口模块。
+
+本模块主要负责：
+1) 解析并校验调用请求。
+2) 通过 LLM 路由器选择工具并执行。
+3) 执行业务主链路（回答 -> PDF -> S3 -> DynamoDB）。
+4) 返回兼容 AgentCore/Lambda 的 HTTP 风格响应。
+"""
+
 import json
-# 记录结构化日志
 import logging
-# 统计函数耗时（高精度计时器）
 from time import perf_counter
-# 类型标注
-from typing import Any
-# 生成唯一记录 ID
+from typing import Any, Callable
 from uuid import uuid4
 
-# 调用 Bedrock 生成回答
 from agent.llm.bedrock import generate_answer
-# 把问答内容渲染为 PDF
 from agent.pdf.render import render_pdf
-# 从环境变量读取运行配置
 from agent.settings import Settings
-# 写入 DynamoDB 记录
 from agent.storage.dynamo import put_record
-# 处理 S3 key、上传 PDF、生成预签名 URL
 from agent.storage.s3 import build_pdf_s3_key, generate_presigned_pdf_url, upload_pdf
 
-# 当前模块的日志器
+# 结构化日志记录器，用于观测时延与异常。
 LOGGER = logging.getLogger(__name__)
-# 请求体里必须出现的字段
+
+# 请求体必填字段。
 REQUIRED_FIELDS = ("prompt", "user_id", "session_id", "locale")
 
+# 路由最大步数上限，防止无限循环和额外成本。
+MAX_ROUTER_STEPS = 3
 
-# 将事件里的 body 统一解析成字典
+# 工具函数统一签名。
+ToolHandler = Callable[[dict[str, Any], Settings], str]
+
+
+# 工具：基于原始 prompt 直接生成回答。
+def _tool_direct_answer(tool_input: dict[str, Any], settings: Settings) -> str:
+    return generate_answer(prompt=str(tool_input.get("prompt", "")), model_id=settings.model_id)
+
+
+# 工具：将原始 prompt 生成精简要点总结。
+def _tool_bullet_summary(tool_input: dict[str, Any], settings: Settings) -> str:
+    prompt = str(tool_input.get("prompt", ""))
+    summary_prompt = (
+        "Summarize the user request in concise bullet points.\n"
+        "Keep it factual and short.\n\n"
+        f"User request:\n{prompt}"
+    )
+    return generate_answer(prompt=summary_prompt, model_id=settings.model_id)
+
+
+# 工具注册表：统一维护
+# - 可用工具名
+# - 工具描述（供路由提示词使用）
+# - 输入 schema 约束
+# - 实际处理函数
+TOOLS: dict[str, dict[str, Any]] = {
+    "direct_answer": {
+        "description": "Return a direct answer to the user prompt.",
+        "required": {"prompt": str},
+        "handler": _tool_direct_answer,
+    },
+    "bullet_summary": {
+        "description": "Return concise bullet summary for the user prompt.",
+        "required": {"prompt": str},
+        "handler": _tool_bullet_summary,
+    },
+}
+
+
 def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
-    # 读取 body 字段（有些调用可能没有这个字段）
+    """将调用事件统一归一化为 dict。
+
+    支持输入格式：
+    - {"body": <dict>}：直接返回 body
+    - {"body": <json 字符串>}：解析后返回
+    - 顶层原始 dict（无 body）：视为 payload 直接返回
+
+    无效/不支持的输入统一返回 {}，交由后续校验处理。
+    """
     body = event.get("body")
-    # 兼容“直接把 payload 放在顶层”的调用方式
     if body is None:
         return event if isinstance(event, dict) else {}
-    # 上游已经是字典时，直接返回
     if isinstance(body, dict):
         return body
-    # 字符串时按 JSON 解析
     if isinstance(body, str):
         try:
             return json.loads(body)
-        # 非法 JSON 统一返回空字典，交给后续参数校验处理
         except json.JSONDecodeError:
             return {}
-    # 其他未知类型按空字典处理
     return {}
 
 
-# 校验缺失字段，返回缺失字段名列表
 def _validate_payload(payload: dict[str, Any]) -> list[str]:
-    # 字段不存在、为 None、或为空字符串时都视为缺失
+    """返回缺失的必填字段列表。
+
+    空字符串与 None 都视为缺失。
+    """
     return [field for field in REQUIRED_FIELDS if payload.get(field) in (None, "")]
 
 
-# 核心业务流程：生成回答、落库、上传 PDF
+def _validate_tool_input(tool_name: str, tool_input: Any) -> list[str]:
+    """按工具注册表定义的 schema 校验输入。
+
+    返回错误列表；空列表表示校验通过。
+    """
+    if tool_name not in TOOLS:
+        return [f"unknown tool: {tool_name}"]
+    if not isinstance(tool_input, dict):
+        return ["tool_input must be an object"]
+
+    errors: list[str] = []
+    required = TOOLS[tool_name]["required"]
+    for field, expected_type in required.items():
+        if field not in tool_input:
+            errors.append(f"missing field: {field}")
+            continue
+        if not isinstance(tool_input[field], expected_type):
+            errors.append(f"field {field} must be {expected_type.__name__}")
+    return errors
+
+
+def _build_router_prompt(user_prompt: str, scratchpad: list[dict[str, Any]]) -> str:
+    """构造严格路由提示词。
+
+    路由器必须只输出 JSON，便于运行时代码安全解析。
+    scratchpad 里包含前序工具输出摘要，用于支持多步路由。
+    """
+    tools_desc = [
+        {
+            "tool": name,
+            "description": spec["description"],
+            "required": list(spec["required"].keys()),
+        }
+        for name, spec in TOOLS.items()
+    ]
+    return (
+        "You are a strict tool router.\n"
+        "Decide the next action for this request.\n"
+        "Return JSON only, no markdown.\n"
+        "Allowed JSON formats:\n"
+        "1) {\"action\":\"call_tool\",\"tool\":\"<name>\",\"tool_input\":{...}}\n"
+        "2) {\"action\":\"final\",\"answer\":\"...\"}\n"
+        "Prefer using at most one tool call unless a follow-up tool is necessary.\n\n"
+        f"Available tools:\n{json.dumps(tools_desc, ensure_ascii=False)}\n\n"
+        f"Scratchpad (previous tool outputs):\n{json.dumps(scratchpad, ensure_ascii=False)}\n\n"
+        f"User prompt:\n{user_prompt}"
+    )
+
+
+def _route_once(user_prompt: str, settings: Settings, scratchpad: list[dict[str, Any]]) -> dict[str, Any]:
+    """执行一次 LLM 路由并归一化输出。
+
+    兜底策略：
+    - 路由结果不是合法 JSON 时，强制回退到 direct_answer。
+    - 当 action=final 且 answer 为文本时，结束工具执行。
+    """
+    router_prompt = _build_router_prompt(user_prompt=user_prompt, scratchpad=scratchpad)
+    router_raw = generate_answer(prompt=router_prompt, model_id=settings.model_id)
+    try:
+        decision = json.loads(router_raw)
+    except json.JSONDecodeError:
+        return {
+            "action": "call_tool",
+            "tool": "direct_answer",
+            "tool_input": {"prompt": user_prompt},
+            "fallback_reason": "router_output_not_json",
+        }
+
+    action = str(decision.get("action", "")).strip()
+    if action == "final" and isinstance(decision.get("answer"), str):
+        return {"action": "final", "answer": decision["answer"]}
+
+    tool = str(decision.get("tool", "")).strip()
+    tool_input = decision.get("tool_input", {})
+    if isinstance(tool_input, dict) and "prompt" not in tool_input:
+        # 确保当前所有工具的最小输入约束都满足。
+        tool_input["prompt"] = user_prompt
+
+    return {"action": "call_tool", "tool": tool, "tool_input": tool_input}
+
+
+def _run_tool_routing(user_prompt: str, settings: Settings) -> tuple[str, str, list[dict[str, Any]]]:
+    """执行“路由-工具”循环，返回 (tool_name, answer, trace)。
+
+    行为说明：
+    - 最多执行 MAX_ROUTER_STEPS 次。
+    - 每步执行：路由 -> 校验 -> 工具调用 -> 更新 scratchpad/trace。
+    - 达到步数上限后，优先返回最后一次有效工具输出。
+    - 若没有可用输出，则回退到 direct_answer。
+    """
+    trace: list[dict[str, Any]] = []
+    scratchpad: list[dict[str, Any]] = []
+    last_tool = "direct_answer"
+    last_output = ""
+
+    for step in range(1, MAX_ROUTER_STEPS + 1):
+        decision = _route_once(user_prompt=user_prompt, settings=settings, scratchpad=scratchpad)
+        action = str(decision.get("action", ""))
+
+        if action == "final":
+            answer = str(decision.get("answer", ""))
+            trace.append({"step": step, "action": "final"})
+            if answer:
+                return last_tool, answer, trace
+            break
+
+        tool_name = str(decision.get("tool", "")).strip()
+        tool_input = decision.get("tool_input")
+        errors = _validate_tool_input(tool_name=tool_name, tool_input=tool_input)
+
+        if errors:
+            trace.append(
+                {
+                    "step": step,
+                    "action": "call_tool",
+                    "tool": tool_name,
+                    "valid": False,
+                    "errors": errors,
+                }
+            )
+            # 不因为路由器输出格式问题而让整个请求失败。
+            tool_name = "direct_answer"
+            tool_input = {"prompt": user_prompt}
+
+        handler = TOOLS[tool_name]["handler"]
+        tool_output = handler(tool_input, settings)
+        last_tool = tool_name
+        last_output = tool_output
+
+        trace.append(
+            {
+                "step": step,
+                "action": "call_tool",
+                "tool": tool_name,
+                "valid": True,
+            }
+        )
+        scratchpad.append(
+            {
+                "tool": tool_name,
+                # 控制 trace 大小，避免响应和日志过大。
+                "output_preview": tool_output[:500],
+            }
+        )
+
+    if last_output:
+        trace.append({"step": MAX_ROUTER_STEPS, "action": "max_steps_reached"})
+        return last_tool, last_output, trace
+
+    fallback_answer = TOOLS["direct_answer"]["handler"]({"prompt": user_prompt}, settings)
+    trace.append({"step": MAX_ROUTER_STEPS, "action": "fallback", "tool": "direct_answer"})
+    return "direct_answer", fallback_answer, trace
+
+
 def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    # 记录开始时间用于统计耗时
+    """单次调用的业务主流程。
+
+    成功路径：
+    1) 校验请求参数
+    2) 执行工具路由并生成回答
+    3) 渲染 PDF
+    4) 上传 S3 并生成预签名 URL
+    5) 持久化到 DynamoDB
+    6) 返回响应体
+
+    失败路径：
+    - 参数错误返回 400
+    - 内部异常返回 500
+    """
     start = perf_counter()
-    # 每次调用分配唯一记录 ID
     record_id = str(uuid4())
-    # 默认状态码先设为 500，成功后再覆盖
     status_code = 500
 
     try:
-        # 先检查必填字段
         missing_fields = _validate_payload(payload)
         if missing_fields:
-            # 参数问题返回 400
             status_code = 400
             return status_code, {"error": "missing required fields", "missing": missing_fields}
 
-        # 读取运行配置
         settings = Settings.from_env()
-        # 生成 AI 回答
-        answer = generate_answer(prompt=payload["prompt"], model_id=settings.model_id)
-        # 将问题和回答渲染为 PDF 字节
+        tool_name, answer, route_trace = _run_tool_routing(
+            user_prompt=payload["prompt"],
+            settings=settings,
+        )
+
         pdf_bytes = render_pdf(
             record_id=record_id,
             prompt=payload["prompt"],
@@ -85,21 +294,19 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             session_id=payload["session_id"],
             locale=payload["locale"],
         )
-        # 生成按年月分层的 S3 对象 key
+
         pdf_key = build_pdf_s3_key(record_id)
-        # 上传 PDF 到 S3
         upload_pdf(
             pdf_bytes=pdf_bytes,
             bucket_name=settings.bucket_name,
             key=pdf_key,
         )
-        # 生成临时下载链接给调用方
         pdf_url = generate_presigned_pdf_url(
             bucket_name=settings.bucket_name,
             key=pdf_key,
             expires_in=settings.pdf_url_expires,
         )
-        # 将问答结果和 PDF key 写入 DynamoDB
+
         put_record(
             table_name=settings.table_name,
             record={
@@ -110,54 +317,53 @@ def handle_invocation(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
                 "locale": payload["locale"],
                 "answer": answer,
                 "pdf_s3_key": pdf_key,
+                "tool": tool_name,
+                "route_trace": route_trace,
             },
         )
 
-        # 业务成功，返回 200 和结果
         status_code = 200
         return status_code, {
             "record_id": record_id,
             "answer": answer,
+            "tool": tool_name,
+            "route_trace": route_trace,
             "pdf": {"s3_key": pdf_key, "url": pdf_url},
         }
-    # 兜底异常：防止内部错误细节泄露给调用方
     except Exception:
-        # 记录完整异常堆栈到日志
         LOGGER.exception("failed to process invocation")
         status_code = 500
-        # 对外仅返回通用错误信息
         return status_code, {"error": "internal_server_error"}
-    # 无论成功失败都记录耗时日志
     finally:
-        # 计算毫秒级延迟
         latency_ms = int((perf_counter() - start) * 1000)
-        # 输出结构化日志，便于检索和监控
         LOGGER.info(
             json.dumps(
                 {"record_id": record_id, "latency_ms": latency_ms, "status_code": status_code},
-                # 保留中文字符，避免转义为 \uXXXX
                 ensure_ascii=False,
             )
         )
 
 
-# AgentCore / Lambda 调用入口
 def invocations(event: dict[str, Any], context: Any | None = None) -> dict[str, Any]:
-    # 当前实现不需要 context，显式删除避免 lint 警告
+    """AgentCore/Lambda 兼容入口。
+
+    返回 HTTP 风格字典：
+    {
+      "statusCode": int,
+      "headers": {"Content-Type": "application/json"},
+      "body": "<json 字符串>"
+    }
+    """
     del context
-    # 解析请求体
     payload = _parse_body(event)
-    # 执行核心业务
     status_code, body = handle_invocation(payload)
-    # 返回标准 HTTP 风格响应结构
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
-        # 返回 JSON 字符串，同时保留非 ASCII 字符
         "body": json.dumps(body, ensure_ascii=False),
     }
 
 
-# 兼容 Lambda 常见入口名
 def lambda_handler(event: dict[str, Any], context: Any | None = None) -> dict[str, Any]:
+    """Lambda 常见入口别名，内部复用 invocations()."""
     return invocations(event, context)
