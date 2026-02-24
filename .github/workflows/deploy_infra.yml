@@ -126,6 +126,9 @@ jobs:
             python -c "import boto3, reportlab; print('deps_ok', boto3.__version__)"
           # 自检通过后再推送到 ECR
           docker push "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}"
+          IMAGE_REF="$(docker image inspect --format='{{index .RepoDigests 0}}' "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}")"
+          echo "image_ref=${IMAGE_REF}" >> "${GITHUB_OUTPUT}"
+          echo "Built image ref: ${IMAGE_REF}"
           # 输出镜像 tag 给 CDK 部署步骤使用
           echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
 
@@ -152,6 +155,7 @@ jobs:
           cdk synth \
             -c existing_ecr_repository_name=${{ steps.ecr.outputs.repo_name }} \
             -c runtime_image_tag=${{ steps.build.outputs.image_tag }} \
+            -c runtime_image_ref="${{ steps.build.outputs.image_ref }}" \
             -c model_id="${MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}" \
             -c model_arn="${MODEL_ARN:-}" \
             -c pdf_url_expires="${PDF_URL_EXPIRES:-600}"
@@ -159,6 +163,7 @@ jobs:
           cdk deploy --all --require-approval never \
             -c existing_ecr_repository_name=${{ steps.ecr.outputs.repo_name }} \
             -c runtime_image_tag=${{ steps.build.outputs.image_tag }} \
+            -c runtime_image_ref="${{ steps.build.outputs.image_ref }}" \
             -c model_id="${MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}" \
             -c model_arn="${MODEL_ARN:-}" \
             -c pdf_url_expires="${PDF_URL_EXPIRES:-600}"
@@ -168,8 +173,12 @@ jobs:
         env:
           AWS_REGION: ap-northeast-1
           DEPLOY_ROLE_NAME: GitHubActions-Deploy-InfraRole
+          BUILT_IMAGE_TAG: ${{ steps.build.outputs.image_tag }}
+          BUILT_IMAGE_REF: ${{ steps.build.outputs.image_ref }}
         run: |
           set -euo pipefail
+          echo "Smoke is validating runtime image tag: ${BUILT_IMAGE_TAG}"
+          echo "Smoke is validating runtime image ref: ${BUILT_IMAGE_REF}"
           STACK_NAME="InfraStack"
           STACK_OUTPUTS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].Outputs" --output json)"
           RUNTIME_ARN="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeArn") | .OutputValue' | head -n1)"
