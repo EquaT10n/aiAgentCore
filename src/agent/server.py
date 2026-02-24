@@ -5,8 +5,6 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from agent.app import invocations
-
 
 class _Handler(BaseHTTPRequestHandler):
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
@@ -27,6 +25,12 @@ class _Handler(BaseHTTPRequestHandler):
             body_obj = json.loads(body_raw.decode("utf-8"))
         except Exception:
             self._send_json(400, {"message": "invalid_json"})
+            return
+
+        try:
+            from agent.app import invocations
+        except Exception as exc:  # noqa: BLE001
+            self._send_json(500, {"error": "startup_import_error", "detail": str(exc)})
             return
 
         response = invocations({"body": body_obj})
@@ -57,10 +61,10 @@ class _Handler(BaseHTTPRequestHandler):
 def main() -> None:
     host = "0.0.0.0"
     port = int(os.getenv("PORT", "8080"))
+    print(f"agent server starting on {host}:{port}", flush=True)
     server = ThreadingHTTPServer((host, port), _Handler)
     server.serve_forever()
 
 
 if __name__ == "__main__":
     main()
-
