@@ -48,7 +48,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(status, payload)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/health":
+        if self.path in ("/", "/health", "/healthz", "/ready", "/readyz", "/ping"):
             self._send_json(200, {"ok": True})
             return
         self._send_json(404, {"message": "not_found"})
@@ -63,7 +63,11 @@ def main() -> None:
     port = int(os.getenv("PORT", "8080"))
     print(f"agent server starting on {host}:{port}", flush=True)
     server = ThreadingHTTPServer((host, port), _Handler)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except Exception as exc:  # noqa: BLE001
+        print(f"agent server crashed: {exc}", flush=True)
+        raise
 
 
 if __name__ == "__main__":
