@@ -163,11 +163,18 @@ jobs:
           STACK_NAME="InfraStack"
           STACK_OUTPUTS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].Outputs" --output json)"
           RUNTIME_ARN="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeArn") | .OutputValue' | head -n1)"
+          ENDPOINT_NAME="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointName") | .OutputValue' | head -n1)"
           if [ -z "${RUNTIME_ARN}" ] || [ "${RUNTIME_ARN}" = "None" ]; then
             echo "Missing required stack output: AgentRuntimeArn"
             echo "${STACK_OUTPUTS}"
             exit 1
           fi
+          if [ -z "${ENDPOINT_NAME}" ] || [ "${ENDPOINT_NAME}" = "None" ]; then
+            echo "Missing required stack output: AgentRuntimeEndpointName"
+            echo "${STACK_OUTPUTS}"
+            exit 1
+          fi
+          ENDPOINT_ARN="${RUNTIME_ARN}/runtime-endpoint/${ENDPOINT_NAME}"
           cat > policy.json <<EOF
           {
             "Version": "2012-10-17",
@@ -176,7 +183,11 @@ jobs:
                 "Sid": "AllowInvokeAgentRuntimeSmoke",
                 "Effect": "Allow",
                 "Action": "bedrock-agentcore:InvokeAgentRuntime",
-                "Resource": "${RUNTIME_ARN}"
+                "Resource": [
+                  "${RUNTIME_ARN}",
+                  "${ENDPOINT_ARN}",
+                  "${RUNTIME_ARN}/runtime-endpoint/*"
+                ]
               }
             ]
           }
