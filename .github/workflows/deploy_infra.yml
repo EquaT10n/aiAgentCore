@@ -100,8 +100,8 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 构建并推送 ARM64 运行时镜像
-      - name: Build and push runtime image (linux/arm64)
+      # 构建并推送 AMD64 运行时镜像
+      - name: Build and push runtime image (linux/amd64)
         # 步骤输出 ID
         id: build
         env:
@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
           # 使用 buildx 构建并直接 push 到 ECR
           docker buildx build \
-            --platform linux/arm64 \
+            --platform linux/amd64 \
             --file src/agent/Dockerfile \
             --tag "${{ steps.ecr.outputs.repo_uri }}:${IMAGE_TAG}" \
             --push \
@@ -223,6 +223,7 @@ jobs:
           import os
           import sys
           import time
+          from datetime import datetime, timedelta, timezone
 
           import boto3
 
@@ -239,6 +240,52 @@ jobs:
           }
 
           client = boto3.client("bedrock-agentcore", region_name=region)
+          logs_client = boto3.client("logs", region_name=region)
+
+          def dump_runtime_start_logs() -> None:
+              runtime_id_hint = runtime_arn.rsplit("/", 1)[-1]
+              now = datetime.now(timezone.utc)
+              start_ms = int((now - timedelta(minutes=20)).timestamp() * 1000)
+              end_ms = int(now.timestamp() * 1000)
+              try:
+                  groups = []
+                  paginator = logs_client.get_paginator("describe_log_groups")
+                  for page in paginator.paginate():
+                      for g in page.get("logGroups", []):
+                          name = g.get("logGroupName", "")
+                          if (
+                              "bedrock" in name.lower()
+                              and ("agentcore" in name.lower() or "runtime" in name.lower())
+                          ):
+                              groups.append(name)
+                  if not groups:
+                      print("CloudWatch diagnostic: no matching Bedrock/AgentCore log groups found.")
+                      return
+                  print("CloudWatch diagnostic log groups:")
+                  for name in groups[:20]:
+                      print(f"  - {name}")
+                  for group in groups[:5]:
+                      try:
+                          events = logs_client.filter_log_events(
+                              logGroupName=group,
+                              startTime=start_ms,
+                              endTime=end_ms,
+                              limit=50,
+                          ).get("events", [])
+                      except Exception as inner_exc:  # noqa: BLE001
+                          print(f"CloudWatch diagnostic read failed for {group}: {inner_exc}")
+                          continue
+                      matched = []
+                      for ev in events:
+                          msg = ev.get("message", "")
+                          if runtime_id_hint in msg or endpoint_name in msg or "error" in msg.lower():
+                              matched.append(msg.strip())
+                      if matched:
+                          print(f"CloudWatch diagnostic events from {group}:")
+                          for line in matched[-20:]:
+                              print(line)
+              except Exception as exc:  # noqa: BLE001
+                  print(f"CloudWatch diagnostic failed: {exc}")
 
           def decode_response_blob(blob: object) -> dict:
               if isinstance(blob, (bytes, bytearray)):
@@ -281,6 +328,7 @@ jobs:
                   last_error = exc
                   print(f"Smoke attempt {i} failed ({exc.__class__.__name__}): {exc}")
                   if i == 6:
+                      dump_runtime_start_logs()
                       raise
                   time.sleep(10)
 
