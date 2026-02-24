@@ -154,6 +154,40 @@ jobs:
             -c pdf_url_expires="${PDF_URL_EXPIRES:-600}"
 
       # 部署后做一次真实调用烟雾测试，验证端到端可用
+      - name: Grant smoke invoke permission to deploy role
+        env:
+          AWS_REGION: ap-northeast-1
+          DEPLOY_ROLE_NAME: GitHubActions-Deploy-InfraRole
+        run: |
+          set -euo pipefail
+          STACK_NAME="InfraStack"
+          STACK_OUTPUTS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].Outputs" --output json)"
+          RUNTIME_ARN="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeArn") | .OutputValue' | head -n1)"
+          if [ -z "${RUNTIME_ARN}" ] || [ "${RUNTIME_ARN}" = "None" ]; then
+            echo "Missing required stack output: AgentRuntimeArn"
+            echo "${STACK_OUTPUTS}"
+            exit 1
+          fi
+          cat > policy.json <<EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "AllowInvokeAgentRuntimeSmoke",
+                "Effect": "Allow",
+                "Action": "bedrock-agentcore:InvokeAgentRuntime",
+                "Resource": "${RUNTIME_ARN}"
+              }
+            ]
+          }
+          EOF
+          aws iam put-role-policy \
+            --role-name "${DEPLOY_ROLE_NAME}" \
+            --policy-name "AllowInvokeAgentRuntimeSmoke" \
+            --policy-document file://policy.json
+          # IAM policy propagation can be eventually consistent.
+          sleep 10
+
       - name: Smoke test /invocations
         env:
           AWS_REGION: ap-northeast-1
