@@ -1,14 +1,18 @@
+# Buildspec 版本
 version: 0.2
 
 phases:
   install:
     runtime-versions:
+      # CI 统一 Python 版本
       python: 3.11
     commands:
+      # 安装基础工具与项目本身
       - python -m pip install --upgrade pip
       - pip install ruff pytest
       - pip install -e .
   build:
     commands:
+      # 代码检查 + 测试
       - ruff check .
       - pytest -q
