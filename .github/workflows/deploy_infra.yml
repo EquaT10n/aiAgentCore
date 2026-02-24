@@ -181,6 +181,8 @@ jobs:
           echo "Smoke is validating runtime image ref: ${BUILT_IMAGE_REF}"
           STACK_NAME="InfraStack"
           STACK_OUTPUTS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].Outputs" --output json)"
+          STACK_RUNTIME_IMAGE_URI="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="RuntimeContainerImageUri") | .OutputValue' | head -n1)"
+          echo "Stack RuntimeContainerImageUri: ${STACK_RUNTIME_IMAGE_URI}"
           RUNTIME_ARN="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeArn") | .OutputValue' | head -n1)"
           ENDPOINT_NAME="$(echo "${STACK_OUTPUTS}" | jq -r '.[] | select(.OutputKey=="AgentRuntimeEndpointName") | .OutputValue' | head -n1)"
           if [ -z "${RUNTIME_ARN}" ] || [ "${RUNTIME_ARN}" = "None" ]; then

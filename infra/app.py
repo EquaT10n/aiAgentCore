@@ -172,6 +172,9 @@ class InfraStack(Stack):
             if runtime_image_ref
             else f"{runtime_repo.repository_uri}:{runtime_image_tag}"
         )
+        endpoint_deploy_marker = (str(runtime_image_tag) if runtime_image_tag else "latest")[:48]
+        if runtime_image_ref:
+            endpoint_deploy_marker = str(runtime_image_ref).split("@")[-1][:48]
 
         runtime = bedrockagentcore.CfnRuntime(
             self,
@@ -210,8 +213,8 @@ class InfraStack(Stack):
             agent_runtime_id=runtime.attr_agent_runtime_id,
             # 端点名称，用作 qualifier
             name="prod",
-            # 端点说明
-            description="Primary endpoint for ai-agentcore runtime.",
+            # 端点说明（包含镜像 marker，确保镜像变更时 endpoint 也发生更新）
+            description=f"Primary endpoint for ai-agentcore runtime. marker={endpoint_deploy_marker}",
         )
         # 显式依赖：确保先创建 runtime 再创建 endpoint
         runtime_endpoint.add_dependency(runtime)
@@ -250,6 +253,7 @@ class InfraStack(Stack):
         CfnOutput(self, "QaTableArn", value=qa_table.table_arn)
         CfnOutput(self, "RuntimeImageRepositoryName", value=ecr_repository_name)
         CfnOutput(self, "RuntimeImageRepositoryUri", value=runtime_repo.repository_uri)
+        CfnOutput(self, "RuntimeContainerImageUri", value=container_image_uri)
         CfnOutput(self, "AgentRuntimeArn", value=runtime.attr_agent_runtime_arn)
         CfnOutput(self, "AgentRuntimeId", value=runtime.attr_agent_runtime_id)
         CfnOutput(
