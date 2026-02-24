@@ -5,8 +5,8 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Runtime code depends on boto3/reportlab.
-RUN pip install --no-cache-dir "boto3>=1.34,<2" "reportlab>=4,<5"
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app/agent
 
